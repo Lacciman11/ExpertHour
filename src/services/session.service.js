@@ -94,6 +94,24 @@ class SessionService {
 
     }
 
+    async findUserSessions(userId) {
+
+        return Session.find({
+            user: userId,
+            isRevoked: false,
+        });
+
+    }
+
+    async deleteSession(sessionId) {
+
+        return Session.findByIdAndDelete(
+            sessionId
+        );
+
+    }
+
 }
+
 
 export default new SessionService();

@@ -1,12 +1,8 @@
 import express from "express";
-import cors from "cors";
-import helmet from "helmet";
-import compression from "compression";
-import cookieParser from "cookie-parser";
-import morgan from "morgan";
 
-import authRoutes from "./routes/auth.routes.js";
-import errorHandler from "./middlewares/error.middleware.js";
+import registerMiddlewares, { errorHandler }
+    from "./middlewares/index.js";
+import registerRoutes from "./routes/index.js";
 
 const app = express();
 
@@ -16,31 +12,7 @@ const app = express();
 |--------------------------------------------------------------------------
 */
 
-// Parse JSON requests
-app.use(express.json());
-
-// Parse URL Encoded Data
-app.use(express.urlencoded({ extended: true }));
-
-// Enable CORS
-app.use(
-    cors({
-        origin: true,
-        credentials: true,
-    })
-);
-
-// Secure HTTP Headers
-app.use(helmet());
-
-// Compress Responses
-app.use(compression());
-
-// Parse Cookies
-app.use(cookieParser());
-
-// HTTP Logger
-app.use(morgan("dev"));
+registerMiddlewares(app);
 
 /*
 |--------------------------------------------------------------------------
@@ -48,7 +20,7 @@ app.use(morgan("dev"));
 |--------------------------------------------------------------------------
 */
 
-app.use("/api/v1/auth", authRoutes);
+registerRoutes(app);
 
 /*
 |--------------------------------------------------------------------------
