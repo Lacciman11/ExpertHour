@@ -1,26 +1,68 @@
 import nodemailer from "nodemailer";
 import env from "../../../config/env.js";
+import dns from "dns";
+import { promisify } from "util";
 
-const port = Number(env.email.port);
+const lookup = promisify(dns.lookup);
 
-const transporter = nodemailer.createTransport({
-    host: env.email.host,
-    port,
+const resolveIPv4 = async (hostname) => {
 
-    // Use implicit TLS only on 465; otherwise use STARTTLS (e.g. 587).
-    secure: port === 465,
-    requireTLS: port === 587,
+    try {
 
-    auth: {
-        user: env.email.user,
-        pass: env.email.password,
-    },
+        const result = await lookup(hostname, { family: 4 });
 
-    family: 4,
+        return result.address;
 
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 10000,
-});
+    } catch (error) {
 
-export default transporter;
+        console.error("DNS lookup failed, falling back to hostname:", error.message);
+
+        return hostname;
+
+    }
+
+};
+
+let transporter = null;
+
+const getTransporter = async () => {
+
+    if (transporter) {
+
+        return transporter;
+
+    }
+
+    const port = Number(env.email.port);
+
+    const host = await resolveIPv4(env.email.host);
+
+    transporter = nodemailer.createTransport({
+        host,
+        port,
+
+        // Use implicit TLS only on 465; otherwise use STARTTLS (e.g. 587).
+        secure: port === 465,
+        requireTLS: port === 587,
+
+        auth: {
+            user: env.email.user,
+            pass: env.email.password,
+        },
+
+        family: 4,
+
+        tls: {
+            servername: env.email.host,
+        },
+
+        connectionTimeout: 15000,
+        greetingTimeout: 15000,
+        socketTimeout: 15000,
+    });
+
+    return transporter;
+
+};
+
+export default getTransporter;

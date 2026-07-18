@@ -6,6 +6,9 @@ import tokenService from "./token.service.js";
 import userService from "./user.service.js";
 import passwordResetTokenService from "./password-reset-token.service.js";
 import resetPasswordService from "./auth/reset-password.service.js";
+import emailVerificationTokenService from "./email-verification-token.service.js";
+import cloudinaryService from "./cloudinary.service.js";
+import consultantProfileService from "./consultant-profile.service.js";
 
 export {
     authService,
@@ -15,4 +18,7 @@ export {
     userService,
     passwordResetTokenService,
     resetPasswordService,
+    emailVerificationTokenService,
+    cloudinaryService,
+    consultantProfileService,
 };

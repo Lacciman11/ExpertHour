@@ -26,6 +26,12 @@ const env = {
         password: process.env.EMAIL_PASSWORD,
         from: process.env.EMAIL_FROM,
     },
+
+    cloudinary: {
+        cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+        apiKey: process.env.CLOUDINARY_API_KEY,
+        apiSecret: process.env.CLOUDINARY_API_SECRET,
+    },
 };
 
 /*

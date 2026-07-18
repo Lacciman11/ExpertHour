@@ -1,5 +1,5 @@
 import env from "../../config/env.js";
-import transporter from "./providers/nodemailer.provider.js";
+import getTransporter from "./providers/nodemailer.provider.js";
 
 class EmailService {
 
@@ -14,6 +14,8 @@ class EmailService {
     }) {
 
         try {
+
+            const transporter = await getTransporter();
 
             return await transporter.sendMail({
 

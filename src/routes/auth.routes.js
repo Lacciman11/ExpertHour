@@ -7,6 +7,9 @@ import {
     forgotPassword,
     resetPassword,
     logout,
+    verifyEmail,
+    resendVerificationEmail,
+    logoutAll,
 
 } from "../controllers/index.js";
 
@@ -16,10 +19,12 @@ import {
     forgotPasswordValidator,
     resetPasswordValidator,
     logoutValidator,
+    resendVerificationEmailValidator,
 
 } from "../validators/auth.validator.js";
 
 import validate from "../middlewares/validate.middleware.js";
+import authenticate from "../middlewares/auth.middleware.js";
 
 const router = Router();
 
@@ -49,6 +54,8 @@ const loginLimiter = createLimiter(10);
 const forgotPasswordLimiter = createLimiter(5);
 const resetPasswordLimiter = createLimiter(10);
 const logoutLimiter = createLimiter(10);
+const resendVerificationEmailLimiter = createLimiter(5);
+const logoutAllLimiter = createLimiter(10);
 
 /*
 |--------------------------------------------------------------------------
@@ -94,6 +101,26 @@ router.post(
     logoutValidator,
     validate,
     logout
+);
+
+router.get(
+    "/verify-email",
+    verifyEmail
+);
+
+router.post(
+    "/resend-verification-email",
+    resendVerificationEmailLimiter,
+    resendVerificationEmailValidator,
+    validate,
+    resendVerificationEmail
+);
+
+router.post(
+    "/logout-all",
+    authenticate,
+    logoutAllLimiter,
+    logoutAll
 );
 
 export default router;
