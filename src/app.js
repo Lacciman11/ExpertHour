@@ -1,8 +1,13 @@
 import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
 
 import registerMiddlewares, { errorHandler }
     from "./middlewares/index.js";
 import registerRoutes from "./routes/index.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 
@@ -37,15 +42,14 @@ app.get("/", (req, res) => {
 
 /*
 |--------------------------------------------------------------------------
-| 404 Handler
+| Serve Frontend (SPA fallback)
 |--------------------------------------------------------------------------
 */
 
-app.use((req, res) => {
-    res.status(404).json({
-        success: false,
-        message: "Route Not Found",
-    });
+app.use(express.static(path.join(__dirname, "../public")));
+
+app.get("/{*path}", (req, res) => {
+    res.sendFile(path.join(__dirname, "../public/index.html"));
 });
 
 /*

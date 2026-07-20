@@ -2,6 +2,8 @@ import asyncHandler from "../utils/asyncHandler.js";
 
 import ApiResponse from "../utils/ApiResponse.js";
 
+import env from "../config/env.js";
+
 import {
     authService,
     resetPasswordService,
@@ -133,13 +135,7 @@ export const verifyEmail = asyncHandler(async (req, res) => {
 
     await authService.verifyEmail.execute(token);
 
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            null,
-            "Email verified successfully"
-        )
-    );
+    return res.redirect(`${env.appUrl}/login?verified=true`);
 
 });
 

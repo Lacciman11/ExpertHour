@@ -69,7 +69,7 @@ class ForgotPasswordService {
         */
 
         const resetUrl =
-            `${env.appUrl}/auth/reset-password?token=${rawToken}`;
+            `${env.appUrl}/reset-password?token=${rawToken}`;
 
         /*
         |--------------------------------------------------------------------------
