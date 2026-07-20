@@ -10,6 +10,7 @@ import {
     verifyEmail,
     resendVerificationEmail,
     logoutAll,
+    refreshToken,
 
 } from "../controllers/index.js";
 
@@ -20,6 +21,7 @@ import {
     resetPasswordValidator,
     logoutValidator,
     resendVerificationEmailValidator,
+    refreshTokenValidator,
 
 } from "../validators/auth.validator.js";
 
@@ -56,6 +58,7 @@ const resetPasswordLimiter = createLimiter(10);
 const logoutLimiter = createLimiter(10);
 const resendVerificationEmailLimiter = createLimiter(5);
 const logoutAllLimiter = createLimiter(10);
+const refreshTokenLimiter = createLimiter(10);
 
 /*
 |--------------------------------------------------------------------------
@@ -114,6 +117,14 @@ router.post(
     resendVerificationEmailValidator,
     validate,
     resendVerificationEmail
+);
+
+router.post(
+    "/refresh-token",
+    refreshTokenLimiter,
+    refreshTokenValidator,
+    validate,
+    refreshToken
 );
 
 router.post(

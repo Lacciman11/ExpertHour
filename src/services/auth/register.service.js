@@ -54,21 +54,43 @@ const register = async ({
     const verificationUrl =
         `${env.appUrl}/api/v1/auth/verify-email?token=${rawToken}`;
 
-    await emailService.send({
+    try {
 
-        to: user.email,
+        await emailService.send({
 
-        subject: "Verify your ExpertHour email",
+            to: user.email,
 
-        html: verifyEmailTemplate({
+            subject: "Verify your ExpertHour email",
 
-            firstName: user.firstName,
+            html: verifyEmailTemplate({
 
-            verificationUrl,
+                firstName: user.firstName,
 
-        }),
+                verificationUrl,
 
-    });
+            }),
+
+        });
+
+    } catch (error) {
+
+        console.error(
+
+            "Failed to send verification email:",
+
+            {
+
+                userId: user._id.toString(),
+
+                email: user.email,
+
+                error: error?.message || error,
+
+            }
+
+        );
+
+    }
 
     const payload = {
         userId: user._id,

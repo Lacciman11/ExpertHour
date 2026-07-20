@@ -9,6 +9,7 @@ import resetPasswordService from "./auth/reset-password.service.js";
 import emailVerificationTokenService from "./email-verification-token.service.js";
 import cloudinaryService from "./cloudinary.service.js";
 import consultantProfileService from "./consultant-profile.service.js";
+import refreshTokenService from "./auth/refresh-token.service.js";
 
 export {
     authService,
@@ -21,4 +22,5 @@ export {
     emailVerificationTokenService,
     cloudinaryService,
     consultantProfileService,
+    refreshTokenService,
 };

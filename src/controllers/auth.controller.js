@@ -8,6 +8,7 @@ import {
     authService,
     resetPasswordService,
     sessionService,
+    refreshTokenService,
 } from "../services/index.js";
 
 export const register = asyncHandler(async (req, res) => {
@@ -148,6 +149,22 @@ export const resendVerificationEmail = asyncHandler(async (req, res) => {
             200,
             null,
             "If an account with that email exists, a verification link has been sent."
+        )
+    );
+
+});
+
+export const refreshToken = asyncHandler(async (req, res) => {
+
+    const { refreshToken } = req.body;
+
+    const result = await refreshTokenService.execute(refreshToken);
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            result,
+            "Token refreshed successfully"
         )
     );
 

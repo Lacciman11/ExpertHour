@@ -7,6 +7,7 @@ import {
     verifyEmail,
     resendVerificationEmail,
     logoutAll,
+    refreshToken,
 } from "./auth.controller.js";
 
 import {
@@ -41,6 +42,7 @@ export {
     verifyEmail,
     resendVerificationEmail,
     logoutAll,
+    refreshToken,
     getProfile,
     updateProfile,
     changePassword,

@@ -78,6 +78,17 @@ export const logoutValidator = [
 ];
 
 
+export const refreshTokenValidator = [
+
+    body("refreshToken")
+
+        .notEmpty()
+
+        .withMessage("Refresh token is required"),
+
+];
+
+
 export const resendVerificationEmailValidator = [
 
     body("email")

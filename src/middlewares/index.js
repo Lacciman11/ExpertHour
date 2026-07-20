@@ -27,7 +27,7 @@ const registerMiddlewares = (app) => {
     
     // Allow Vite dev server in development
     if (process.env.NODE_ENV === 'development') {
-        allowedOrigins.push('http://localhost:3000', 'http://127.0.0.1:3000')
+        allowedOrigins.push('http://localhost:5000', 'http://127.0.0.1:3000')
     }
     
     app.use(
