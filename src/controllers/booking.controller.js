@@ -164,3 +164,77 @@ export const getAllBookings = asyncHandler(async (req, res) => {
     );
 
 });
+
+export const getPendingRequests = asyncHandler(async (req, res) => {
+
+    const requests = await bookingService.getPendingRequests(req.user._id);
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            requests,
+            "Pending requests fetched successfully"
+        )
+    );
+
+});
+
+export const getConsultantUpcomingSessions = asyncHandler(async (req, res) => {
+
+    const sessions = await bookingService.getConsultantUpcomingSessions(req.user._id);
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            sessions,
+            "Upcoming sessions fetched successfully"
+        )
+    );
+
+});
+
+export const getEarningsSummary = asyncHandler(async (req, res) => {
+
+    const summary = await bookingService.getEarningsSummary(req.user._id);
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            summary,
+            "Earnings summary fetched successfully"
+        )
+    );
+
+});
+
+export const acceptBooking = asyncHandler(async (req, res) => {
+
+    const { id } = req.params;
+
+    const booking = await bookingService.acceptBooking(id, req.user._id);
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            booking,
+            "Booking accepted successfully"
+        )
+    );
+
+});
+
+export const declineBooking = asyncHandler(async (req, res) => {
+
+    const { id } = req.params;
+
+    const booking = await bookingService.declineBooking(id, req.user._id);
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            booking,
+            "Booking declined successfully"
+        )
+    );
+
+});

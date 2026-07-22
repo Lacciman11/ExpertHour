@@ -238,6 +238,10 @@ class BookingService {
 
         const totalRevenue = revenueResult.length > 0 ? revenueResult[0].totalRevenue : 0;
 
+        // Get consultant profile for rating
+        const consultantProfile = await ConsultantProfile.findOne({ userId: consultantId });
+        const rating = consultantProfile ? consultantProfile.rating : 0;
+
         return {
             totalBookings,
             pendingBookings,
@@ -245,7 +249,142 @@ class BookingService {
             completedBookings,
             cancelledBookings,
             totalRevenue,
+            rating,
         };
+    }
+
+    async getPendingRequests(consultantId) {
+        return await Booking.find({
+            consultantId,
+            status: BOOKING_STATUS.PENDING,
+        })
+            .populate("clientId", "firstName lastName email")
+            .populate("consultantProfileId", "hourlyRate skills")
+            .sort({ createdAt: -1 });
+    }
+
+    async getConsultantUpcomingSessions(consultantId) {
+        const now = new Date();
+        const today = now.toISOString().split("T")[0];
+
+        return await Booking.find({
+            consultantId,
+            status: { $in: [BOOKING_STATUS.CONFIRMED] },
+            date: { $gte: today },
+        })
+            .populate("clientId", "firstName lastName")
+            .populate("consultantProfileId", "hourlyRate skills")
+            .sort({ date: 1, time: 1 })
+            .limit(5);
+    }
+
+    async getEarningsSummary(consultantId) {
+        const now = new Date();
+        const today = now.toISOString().split("T")[0];
+
+        // This week (last 7 days)
+        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+        const thisWeekRevenue = await Booking.aggregate([
+            {
+                $match: {
+                    consultantId: new mongoose.Types.ObjectId(consultantId),
+                    status: BOOKING_STATUS.COMPLETED,
+                    date: { $gte: weekAgo, $lte: today },
+                },
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: "$amount" },
+                },
+            },
+        ]);
+
+        // This month
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
+        const thisMonthRevenue = await Booking.aggregate([
+            {
+                $match: {
+                    consultantId: new mongoose.Types.ObjectId(consultantId),
+                    status: BOOKING_STATUS.COMPLETED,
+                    date: { $gte: monthStart, $lte: today },
+                },
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: "$amount" },
+                },
+            },
+        ]);
+
+        // Total (all time)
+        const totalRevenueResult = await Booking.aggregate([
+            {
+                $match: {
+                    consultantId: new mongoose.Types.ObjectId(consultantId),
+                    status: BOOKING_STATUS.COMPLETED,
+                },
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: "$amount" },
+                },
+            },
+        ]);
+
+        const thisWeek = thisWeekRevenue.length > 0 ? thisWeekRevenue[0].total : 0;
+        const thisMonth = thisMonthRevenue.length > 0 ? thisMonthRevenue[0].total : 0;
+        const total = totalRevenueResult.length > 0 ? totalRevenueResult[0].total : 0;
+
+        return {
+            thisWeek,
+            thisMonth,
+            total,
+        };
+    }
+
+    async acceptBooking(id, consultantId) {
+        const booking = await Booking.findById(id);
+
+        if (!booking) {
+            throw new Error("Booking not found");
+        }
+
+        if (booking.consultantId.toString() !== consultantId.toString()) {
+            throw new Error("Not authorized to accept this booking");
+        }
+
+        if (booking.status !== BOOKING_STATUS.PENDING) {
+            throw new Error("Booking is not pending");
+        }
+
+        booking.status = BOOKING_STATUS.CONFIRMED;
+        await booking.save();
+
+        return booking;
+    }
+
+    async declineBooking(id, consultantId) {
+        const booking = await Booking.findById(id);
+
+        if (!booking) {
+            throw new Error("Booking not found");
+        }
+
+        if (booking.consultantId.toString() !== consultantId.toString()) {
+            throw new Error("Not authorized to decline this booking");
+        }
+
+        if (booking.status !== BOOKING_STATUS.PENDING) {
+            throw new Error("Booking is not pending");
+        }
+
+        booking.status = BOOKING_STATUS.CANCELLED;
+        await booking.save();
+
+        return booking;
     }
 }
 

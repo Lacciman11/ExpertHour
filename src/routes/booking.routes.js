@@ -10,6 +10,11 @@ import {
     completeBooking,
     getConsultantStats,
     getAllBookings,
+    getPendingRequests,
+    getConsultantUpcomingSessions,
+    getEarningsSummary,
+    acceptBooking,
+    declineBooking,
 } from "../controllers/booking.controller.js";
 
 import {
@@ -101,6 +106,35 @@ consultantRouter.patch(
 consultantRouter.get(
     "/stats",
     getConsultantStats
+);
+
+consultantRouter.get(
+    "/pending-requests",
+    getPendingRequests
+);
+
+consultantRouter.get(
+    "/upcoming-sessions",
+    getConsultantUpcomingSessions
+);
+
+consultantRouter.get(
+    "/earnings-summary",
+    getEarningsSummary
+);
+
+consultantRouter.patch(
+    "/:id/accept",
+    bookingIdParamValidator,
+    validate,
+    acceptBooking
+);
+
+consultantRouter.patch(
+    "/:id/decline",
+    bookingIdParamValidator,
+    validate,
+    declineBooking
 );
 
 router.use("/consultant", consultantRouter);
