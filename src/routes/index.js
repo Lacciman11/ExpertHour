@@ -2,11 +2,13 @@ import authRoutes from "./auth.routes.js";
 import authPageRoutes from "./auth.page.routes.js";
 import profileRoutes from "./profile.routes.js";
 import consultantProfileRoutes from "./consultant-profile.routes.js";
+import bookingRoutes from "./booking.routes.js";
 
 const routes = [
     { path: "/api/v1/auth", router: authRoutes },
     { path: "/api/v1/profile", router: profileRoutes },
     { path: "/api/v1/consultant", router: consultantProfileRoutes },
+    { path: "/api/v1/bookings", router: bookingRoutes },
     { path: "/auth", router: authPageRoutes },
 ];
 

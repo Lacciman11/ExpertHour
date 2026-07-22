@@ -10,6 +10,7 @@ import emailVerificationTokenService from "./email-verification-token.service.js
 import cloudinaryService from "./cloudinary.service.js";
 import consultantProfileService from "./consultant-profile.service.js";
 import refreshTokenService from "./auth/refresh-token.service.js";
+import bookingService from "./booking.service.js";
 
 export {
     authService,
@@ -23,4 +24,5 @@ export {
     cloudinaryService,
     consultantProfileService,
     refreshTokenService,
+    bookingService,
 };
