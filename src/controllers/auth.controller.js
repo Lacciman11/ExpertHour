@@ -255,6 +255,28 @@ export const refreshToken = asyncHandler(async (req, res) => {
 
 });
 
+export const getCurrentUser = asyncHandler(async (req, res) => {
+
+    const user = req.user.toObject();
+
+    delete user.password;
+
+    return res.status(200).json(
+
+        new ApiResponse(
+
+            200,
+
+            { user },
+
+            "User fetched successfully"
+
+        )
+
+    );
+
+});
+
 export const logoutAll = asyncHandler(async (req, res) => {
 
     const userId = req.user._id;

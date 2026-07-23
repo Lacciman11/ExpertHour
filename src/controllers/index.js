@@ -8,6 +8,7 @@ import {
     resendVerificationEmail,
     logoutAll,
     refreshToken,
+    getCurrentUser,
 } from "./auth.controller.js";
 
 import {
@@ -43,6 +44,7 @@ export {
     resendVerificationEmail,
     logoutAll,
     refreshToken,
+    getCurrentUser,
     getProfile,
     updateProfile,
     changePassword,

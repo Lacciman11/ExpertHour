@@ -11,6 +11,7 @@ import {
     resendVerificationEmail,
     logoutAll,
     refreshToken,
+    getCurrentUser,
 
 } from "../controllers/index.js";
 
@@ -126,6 +127,12 @@ router.post(
     authenticate,
     logoutAllLimiter,
     logoutAll
+);
+
+router.get(
+    "/me",
+    authenticate,
+    getCurrentUser
 );
 
 export default router;
