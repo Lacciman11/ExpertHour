@@ -8,20 +8,18 @@ import User from "../models/User.js";
 
 const authenticate = async (req, res, next) => {
 
-    const authHeader = req.headers.authorization;
+    const accessToken = req.cookies.accessToken;
 
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    if (!accessToken) {
 
         throw new ApiError(401, "Unauthorized");
 
     }
 
-    const token = authHeader.split(" ")[1];
-
     try {
 
         const decoded = jwt.verify(
-            token,
+            accessToken,
             authConfig.accessToken.secret
         );
 

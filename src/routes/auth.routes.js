@@ -19,9 +19,7 @@ import {
     loginValidator,
     forgotPasswordValidator,
     resetPasswordValidator,
-    logoutValidator,
     resendVerificationEmailValidator,
-    refreshTokenValidator,
 
 } from "../validators/auth.validator.js";
 
@@ -101,8 +99,6 @@ router.post(
 router.post(
     "/logout",
     logoutLimiter,
-    logoutValidator,
-    validate,
     logout
 );
 
@@ -122,8 +118,6 @@ router.post(
 router.post(
     "/refresh-token",
     refreshTokenLimiter,
-    refreshTokenValidator,
-    validate,
     refreshToken
 );
 
