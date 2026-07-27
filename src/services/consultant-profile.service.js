@@ -66,20 +66,6 @@ class ConsultantProfileService {
 
         }
 
-        if (filters.search) {
-
-            const searchRegex = { $regex: filters.search, $options: "i" };
-
-            query.$or = [
-
-                { bio: searchRegex },
-
-                { location: searchRegex },
-
-            ];
-
-        }
-
         if (filters.category) {
 
             // Find category ID by name, then filter consultants
@@ -88,6 +74,70 @@ class ConsultantProfileService {
             if (categoryDoc) {
                 query.categories = categoryDoc._id;
             }
+
+        }
+
+        // Use aggregation when search is present to search across populated fields
+        if (filters.search) {
+
+            const searchRegex = { $regex: filters.search, $options: "i" };
+
+            const pipeline = [
+                { $match: query },
+                {
+                    $lookup: {
+                        from: "users",
+                        localField: "userId",
+                        foreignField: "_id",
+                        as: "userId"
+                    }
+                },
+                { $unwind: "$userId" },
+                {
+                    $lookup: {
+                        from: "categories",
+                        localField: "categories",
+                        foreignField: "_id",
+                        as: "categories"
+                    }
+                },
+                {
+                    $match: {
+                        $or: [
+                            { bio: searchRegex },
+                            { location: searchRegex },
+                            { "userId.firstName": searchRegex },
+                            { "userId.lastName": searchRegex },
+                            { "categories.name": searchRegex }
+                        ]
+                    }
+                },
+                { $skip: skip },
+                { $limit: limit },
+                { $sort: { rating: -1, createdAt: -1 } }
+            ];
+
+            const [profiles, total] = await Promise.all([
+
+                ConsultantProfile.aggregate(pipeline),
+
+                ConsultantProfile.countDocuments(query),
+
+            ]);
+
+            return {
+
+                profiles,
+
+                total,
+
+                page,
+
+                limit,
+
+                totalPages: Math.ceil(total / limit),
+
+            };
 
         }
 
