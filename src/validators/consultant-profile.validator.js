@@ -8,20 +8,20 @@ export const createConsultantProfileValidator = [
         .isLength({ max: 2000 })
         .withMessage("Bio cannot exceed 2000 characters"),
 
-    body("skills")
+    body("categories")
         .isArray({ min: 1 })
-        .withMessage("At least one skill is required")
-        .custom((skills) => {
+        .withMessage("At least one category is required")
+        .custom((categories) => {
 
-            if (!skills || !Array.isArray(skills)) {
+            if (!categories || !Array.isArray(categories)) {
 
                 return true;
 
             }
 
-            if (!skills.every((skill) => typeof skill === "string" && skill.trim() !== "")) {
+            if (!categories.every((cat) => typeof cat === "string" && cat.trim() !== "")) {
 
-                throw new Error("Skills must be non-empty strings");
+                throw new Error("Categories must be valid category IDs");
 
             }
 
@@ -162,10 +162,10 @@ export const updateConsultantProfileValidator = [
 
 export const consultantSearchValidator = [
 
-    query("skills")
+    query("categories")
         .optional()
         .isString()
-        .withMessage("Skills must be a comma-separated string"),
+        .withMessage("Categories must be a comma-separated string of category IDs"),
 
     query("minRate")
         .optional()

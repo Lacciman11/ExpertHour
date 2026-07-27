@@ -15,12 +15,12 @@ const consultantProfileSchema = new mongoose.Schema(
             maxlength: [2000, "Bio cannot exceed 2000 characters"],
         },
 
-        skills: {
-            type: [String],
-            required: [true, "At least one skill is required"],
+        categories: {
+            type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Category" }],
+            required: [true, "At least one category is required"],
             validate: {
-                validator: (skills) => skills.length > 0,
-                message: "At least one skill is required",
+                validator: (categories) => categories.length > 0,
+                message: "At least one category is required",
             },
         },
 

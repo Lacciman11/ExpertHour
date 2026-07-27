@@ -90,7 +90,7 @@ export const searchConsultants = asyncHandler(async (req, res) => {
 
     const filters = {
 
-        skills: req.query.skills ? req.query.skills.split(",") : [],
+        categories: req.query.categories ? req.query.categories.split(",") : [],
 
         minRate: req.query.minRate ? parseFloat(req.query.minRate) : undefined,
 

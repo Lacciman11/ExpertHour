@@ -36,9 +36,9 @@ class ConsultantProfileService {
 
         const query = { isActive: true };
 
-        if (filters.skills && filters.skills.length > 0) {
+        if (filters.categories && filters.categories.length > 0) {
 
-            query.skills = { $in: filters.skills };
+            query.categories = { $in: filters.categories };
 
         }
 
@@ -74,15 +74,7 @@ class ConsultantProfileService {
 
                 { bio: searchRegex },
 
-                { skills: searchRegex },
-
                 { location: searchRegex },
-
-                { "userId.firstName": searchRegex },
-
-                { "userId.lastName": searchRegex },
-
-                { "userId.fullName": searchRegex },
 
             ];
 
@@ -90,7 +82,12 @@ class ConsultantProfileService {
 
         if (filters.category) {
 
-            query.skills = { $in: [filters.category] };
+            // Find category ID by name, then filter consultants
+            const Category = (await import("../models/Category.js")).default;
+            const categoryDoc = await Category.findOne({ name: filters.category });
+            if (categoryDoc) {
+                query.categories = categoryDoc._id;
+            }
 
         }
 
@@ -99,6 +96,7 @@ class ConsultantProfileService {
             ConsultantProfile.find(query)
 
                 .populate("userId", "firstName lastName email avatar")
+                .populate("categories", "name")
 
                 .skip(skip)
 

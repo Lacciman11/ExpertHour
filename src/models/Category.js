@@ -9,6 +9,21 @@ const categorySchema = new mongoose.Schema(
             trim: true,
             minlength: [2, "Category name must be at least 2 characters"],
             maxlength: [50, "Category name cannot exceed 50 characters"],
+            enum: {
+                values: [
+                    "Strategy",
+                    "Sales",
+                    "Marketing",
+                    "Finance",
+                    "HR",
+                    "Operations",
+                    "Digital",
+                    "Leadership",
+                    "Customer Experience",
+                    "Startup",
+                ],
+                message: "Invalid category name",
+            },
         },
 
         description: {
