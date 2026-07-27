@@ -100,6 +100,10 @@ export const searchConsultants = asyncHandler(async (req, res) => {
 
         location: req.query.location,
 
+        search: req.query.search,
+
+        category: req.query.category,
+
     };
 
     const pagination = {

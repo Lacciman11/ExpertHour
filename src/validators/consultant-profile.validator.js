@@ -187,6 +187,16 @@ export const consultantSearchValidator = [
         .isString()
         .withMessage("Location must be a string"),
 
+    query("search")
+        .optional()
+        .isString()
+        .withMessage("Search must be a string"),
+
+    query("category")
+        .optional()
+        .isString()
+        .withMessage("Category must be a string"),
+
     query("page")
         .optional()
         .isInt({ min: 1 })

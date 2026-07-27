@@ -30,6 +30,14 @@ import {
 } from "./consultant-profile.controller.js";
 
 import {
+    createCategory,
+    getAllCategories,
+    getCategoryById,
+    updateCategory,
+    deleteCategory,
+} from "./category.controller.js";
+
+import {
     renderResetPasswordPage,
     renderResetSuccessPage,
 } from "./auth.page.controller.js";
@@ -57,6 +65,11 @@ export {
     updateConsultantProfile,
     searchConsultants,
     deleteConsultantProfile,
+    createCategory,
+    getAllCategories,
+    getCategoryById,
+    updateCategory,
+    deleteCategory,
     renderResetPasswordPage,
     renderResetSuccessPage,
 };

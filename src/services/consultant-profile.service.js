@@ -66,6 +66,34 @@ class ConsultantProfileService {
 
         }
 
+        if (filters.search) {
+
+            const searchRegex = { $regex: filters.search, $options: "i" };
+
+            query.$or = [
+
+                { bio: searchRegex },
+
+                { skills: searchRegex },
+
+                { location: searchRegex },
+
+                { "userId.firstName": searchRegex },
+
+                { "userId.lastName": searchRegex },
+
+                { "userId.fullName": searchRegex },
+
+            ];
+
+        }
+
+        if (filters.category) {
+
+            query.skills = { $in: [filters.category] };
+
+        }
+
         const [profiles, total] = await Promise.all([
 
             ConsultantProfile.find(query)

@@ -11,6 +11,7 @@ import cloudinaryService from "./cloudinary.service.js";
 import consultantProfileService from "./consultant-profile.service.js";
 import refreshTokenService from "./auth/refresh-token.service.js";
 import bookingService from "./booking.service.js";
+import categoryService from "./category.service.js";
 
 export {
     authService,
@@ -25,4 +26,5 @@ export {
     consultantProfileService,
     refreshTokenService,
     bookingService,
+    categoryService,
 };
