@@ -48,7 +48,7 @@ export const getConsultantProfileById = asyncHandler(async (req, res) => {
 
     const { id } = req.params;
 
-    const profile = await consultantProfileService.findById(id);
+    const profile = await consultantProfileService.findById(id, true);
 
     if (!profile || !profile.isActive) {
 

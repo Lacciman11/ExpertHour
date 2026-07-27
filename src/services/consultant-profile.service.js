@@ -16,9 +16,17 @@ class ConsultantProfileService {
 
     }
 
-    async findById(id) {
+    async findById(id, populate = false) {
 
-        return await ConsultantProfile.findById(id);
+        let query = ConsultantProfile.findById(id);
+
+        if (populate) {
+            query = query
+                .populate("userId", "firstName lastName email avatar")
+                .populate("categories", "name");
+        }
+
+        return await query;
 
     }
 
