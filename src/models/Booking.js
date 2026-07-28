@@ -60,6 +60,22 @@ const bookingSchema = new mongoose.Schema(
             maxlength: [500, "Notes cannot exceed 500 characters"],
             default: "",
         },
+
+        paymentReference: {
+            type: String,
+            default: "",
+        },
+
+        paymentStatus: {
+            type: String,
+            enum: ["pending", "paid", "failed"],
+            default: "pending",
+        },
+
+        paymentMethod: {
+            type: String,
+            default: "paystack",
+        },
     },
     {
         timestamps: true,
