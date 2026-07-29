@@ -15,21 +15,13 @@ const router = Router();
 
 /*
 |--------------------------------------------------------------------------
-| All availability routes require authentication
-|--------------------------------------------------------------------------
-*/
-
-router.use(authenticate);
-
-/*
-|--------------------------------------------------------------------------
-| Consultant Routes (CONSULTANT only)
+| Consultant Routes (CONSULTANT only) — require authentication
 |--------------------------------------------------------------------------
 */
 
 const consultantRouter = Router();
 
-consultantRouter.use(authorize("CONSULTANT"));
+consultantRouter.use(authenticate, authorize("CONSULTANT"));
 
 consultantRouter.get("/", getMyAvailability);
 
@@ -43,7 +35,7 @@ router.use("/consultant", consultantRouter);
 
 /*
 |--------------------------------------------------------------------------
-| Public Routes
+| Public Routes — no authentication required
 |--------------------------------------------------------------------------
 */
 
