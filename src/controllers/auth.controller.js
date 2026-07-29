@@ -31,11 +31,44 @@ const setAuthCookies = (res, accessToken, refreshToken) => {
 
     };
 
+
     res.cookie("accessToken", accessToken, cookieOptions);
+
 
     cookieOptions.maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days for refresh token
 
+
     res.cookie("refreshToken", refreshToken, cookieOptions);
+
+};
+
+
+const authResponse = (res, statusCode, result) => {
+
+    const { accessToken, refreshToken, ...userResponse } = result;
+
+
+    return res.status(statusCode).json(
+
+        new ApiResponse(
+
+            statusCode,
+
+            {
+
+                user: userResponse.user,
+
+                accessToken,
+
+                refreshToken,
+
+            },
+
+            userResponse.message || "Authentication successful"
+
+        )
+
+    );
 
 };
 
@@ -55,21 +88,7 @@ export const register = asyncHandler(async (req, res) => {
 
     setAuthCookies(res, result.accessToken, result.refreshToken);
 
-    const { accessToken, refreshToken, ...userResponse } = result;
-
-    return res.status(201).json(
-
-        new ApiResponse(
-
-            201,
-
-            { user: userResponse.user },
-
-            "Registration successful"
-
-        )
-
-    );
+    return authResponse(res, 201, result);
 
 });
 
@@ -89,21 +108,7 @@ export const login = asyncHandler(async (req, res) => {
 
     setAuthCookies(res, result.accessToken, result.refreshToken);
 
-    const { accessToken, refreshToken, ...userResponse } = result;
-
-    return res.status(200).json(
-
-        new ApiResponse(
-
-            200,
-
-            { user: userResponse.user },
-
-            "Login successful"
-
-        )
-
-    );
+    return authResponse(res, 200, result);
 
 });
 
@@ -171,9 +176,19 @@ export const resetPassword = asyncHandler(async (req, res) => {
 
 export const logout = asyncHandler(async (req, res) => {
 
-    const refreshToken = req.cookies.refreshToken;
+    const authHeader = req.headers.authorization;
 
-    await authService.logout.execute(refreshToken);
+    const tokenFromHeader = authHeader && authHeader.startsWith("Bearer ")
+        ? authHeader.slice(7)
+        : null;
+
+    const refreshToken = req.body.refreshToken || tokenFromHeader || req.cookies.refreshToken;
+
+    if (refreshToken) {
+
+        await authService.logout.execute(refreshToken);
+
+    }
 
     res.clearCookie("accessToken", { path: "/" });
 
@@ -227,7 +242,13 @@ export const resendVerificationEmail = asyncHandler(async (req, res) => {
 
 export const refreshToken = asyncHandler(async (req, res) => {
 
-    const refreshToken = req.cookies.refreshToken;
+    const authHeader = req.headers.authorization;
+
+    const tokenFromHeader = authHeader && authHeader.startsWith("Bearer ")
+        ? authHeader.slice(7)
+        : null;
+
+    const refreshToken = req.body.refreshToken || tokenFromHeader || req.cookies.refreshToken;
 
     if (!refreshToken) {
 
@@ -239,21 +260,7 @@ export const refreshToken = asyncHandler(async (req, res) => {
 
     setAuthCookies(res, result.accessToken, result.refreshToken);
 
-    const { accessToken, refreshToken: newRefreshToken } = result;
-
-    return res.status(200).json(
-
-        new ApiResponse(
-
-            200,
-
-            { accessToken, refreshToken: newRefreshToken },
-
-            "Token refreshed successfully"
-
-        )
-
-    );
+    return authResponse(res, 200, result);
 
 });
 

@@ -8,11 +8,17 @@ import User from "../models/User.js";
 
 const authenticate = async (req, res, next) => {
 
-    const accessToken = req.cookies.accessToken;
+    const authHeader = req.headers.authorization
+
+    const tokenFromHeader = authHeader && authHeader.startsWith("Bearer ")
+        ? authHeader.slice(7)
+        : null
+
+    const accessToken = tokenFromHeader || req.cookies.accessToken
 
     if (!accessToken) {
 
-        throw new ApiError(401, "Unauthorized");
+        throw new ApiError(401, "Unauthorized")
 
     }
 
@@ -21,26 +27,26 @@ const authenticate = async (req, res, next) => {
         const decoded = jwt.verify(
             accessToken,
             authConfig.accessToken.secret
-        );
+        )
 
-        const user = await User.findById(decoded.userId);
+        const user = await User.findById(decoded.userId)
 
         if (!user) {
 
-            throw new ApiError(401, "Unauthorized");
+            throw new ApiError(401, "Unauthorized")
 
         }
 
-        req.user = user;
+        req.user = user
 
-        next();
+        next()
 
     } catch (error) {
 
-        throw new ApiError(401, "Invalid or expired token");
+        throw new ApiError(401, "Invalid or expired token")
 
     }
 
-};
+}
 
 export default authenticate;
