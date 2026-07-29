@@ -23,7 +23,7 @@ const setAuthCookies = (res, accessToken, refreshToken) => {
 
         secure: isProduction,
 
-        sameSite: isProduction ? "strict" : "lax",
+        sameSite: "lax",
 
         maxAge: 15 * 60 * 1000, // 15 minutes for access token
 
