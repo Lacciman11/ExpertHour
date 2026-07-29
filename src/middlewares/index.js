@@ -24,7 +24,7 @@ const registerMiddlewares = (app) => {
 
     // Enable CORS
     const allowedOrigins = env.appUrl ? [env.appUrl] : []
-    
+
     // Allow Vite dev server and common frontend origins in development
     if (process.env.NODE_ENV === 'development') {
         allowedOrigins.push(
@@ -35,34 +35,47 @@ const registerMiddlewares = (app) => {
             'http://localhost:4173',
             'http://127.0.0.1:5173',
             'http://localhost:5173',
+            'http://localhost:4200',
+            'http://127.0.0.1:4200',
         )
     }
-    
+
     app.use(
         cors({
-            origin: allowedOrigins.length > 0 ? allowedOrigins : false,
+            origin: function (origin, callback) {
+                // Allow requests with no origin (like mobile apps or curl requests)
+                if (!origin) return callback(null, true)
+                if (allowedOrigins.indexOf(origin) !== -1) {
+                    return callback(null, true)
+                }
+                // In development, allow all origins
+                if (process.env.NODE_ENV === 'development') {
+                    return callback(null, true)
+                }
+                return callback(new Error('Not allowed by CORS'))
+            },
             credentials: true,
         })
-    );
+    )
 
     // Secure HTTP Headers
-    app.use(helmet());
+    app.use(helmet())
 
     // Compress Responses
-    app.use(compression());
+    app.use(compression())
 
     // Parse Cookies
-    app.use(cookieParser());
+    app.use(cookieParser())
 
     // HTTP Logger
-    app.use(morgan("dev"));
+    app.use(morgan("dev"))
 
     // Static Files
-    app.use(express.static(path.join(__dirname, "../public")));
+    app.use(express.static(path.join(__dirname, "../public")))
 
-    return app;
+    return app
 
-};
+}
 
-export default registerMiddlewares;
-export { errorHandler };
+export default registerMiddlewares
+export { errorHandler }
