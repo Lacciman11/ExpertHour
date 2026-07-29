@@ -102,6 +102,25 @@ const consultantProfileSchema = new mongoose.Schema(
             type: Boolean,
             default: true,
         },
+
+        googleCalendar: {
+            accessToken: {
+                type: String,
+                default: null,
+            },
+            refreshToken: {
+                type: String,
+                default: null,
+            },
+            expiresAt: {
+                type: Date,
+                default: null,
+            },
+            connected: {
+                type: Boolean,
+                default: false,
+            },
+        },
     },
     {
         timestamps: true,

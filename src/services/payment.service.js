@@ -1,6 +1,7 @@
 import axios from "axios";
 import Booking from "../models/Booking.js";
 import User from "../models/User.js";
+import googleCalendarService from "./google-calendar.service.js";
 
 class PaymentService {
 
@@ -136,6 +137,18 @@ class PaymentService {
 
                 booking.paymentStatus = "paid";
                 booking.status = "confirmed";
+
+                // Generate meeting link via Google Calendar API
+                const meetingLink = await googleCalendarService.createEventAndGetMeetLink(
+                    booking._id,
+                    booking.date,
+                    booking.time,
+                    booking.duration,
+                    booking.consultantId,
+                    booking.clientId
+                );
+                booking.meetingLink = meetingLink;
+
                 await booking.save();
 
                 return {
@@ -143,6 +156,8 @@ class PaymentService {
                     success: true,
 
                     booking,
+
+                    meetingLink,
 
                     payment: paymentData,
 

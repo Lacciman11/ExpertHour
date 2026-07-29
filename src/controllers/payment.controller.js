@@ -3,6 +3,7 @@ import asyncHandler from "../utils/asyncHandler.js";
 import ApiResponse from "../utils/ApiResponse.js";
 
 import paymentService from "../services/payment.service.js";
+import bookingService from "../services/booking.service.js";
 
 export const initializePayment = asyncHandler(async (req, res) => {
 
@@ -31,6 +32,22 @@ export const verifyPayment = asyncHandler(async (req, res) => {
             200,
             result,
             "Payment verified successfully"
+        )
+    );
+
+});
+
+export const generateMeetingLink = asyncHandler(async (req, res) => {
+
+    const { bookingId } = req.body;
+
+    const booking = await bookingService.generateMeetingLink(bookingId);
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            { meetingLink: booking.meetingLink },
+            "Meeting link generated successfully"
         )
     );
 

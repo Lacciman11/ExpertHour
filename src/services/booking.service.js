@@ -228,6 +228,21 @@ class BookingService {
         return booking;
     }
 
+    async generateMeetingLink(id) {
+        const booking = await Booking.findById(id);
+
+        if (!booking) {
+            throw new Error("Booking not found");
+        }
+
+        const meetingLink = `https://experthour.onrender.com/meeting/${booking._id}`;
+
+        booking.meetingLink = meetingLink;
+        await booking.save();
+
+        return booking;
+    }
+
     async findAll(filters = {}) {
         const query = {};
 
