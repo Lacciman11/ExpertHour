@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import Booking from "../models/Booking.js";
 import User from "../models/User.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
+import ConsultantAvailability from "../models/ConsultantAvailability.js";
 
 import { BOOKING_STATUS } from "../utils/constants.js";
 
@@ -30,6 +31,64 @@ class BookingService {
             throw new Error("Consultant profile not found or inactive");
         }
 
+        // Check consultant availability for the requested date
+        const requestedDate = new Date(date);
+        const dayOfWeek = requestedDate.getDay();
+
+        const availabilitySlots = await ConsultantAvailability.find({
+            consultantProfileId,
+            dayOfWeek,
+            isActive: true,
+        });
+
+        if (availabilitySlots.length === 0) {
+            throw new Error("Consultant is not available on this date");
+        }
+
+        // Check if the requested time falls within any availability slot
+        const requestedStart = this._timeToMinutes(time);
+        const requestedEnd = requestedStart + duration;
+
+        const isWithinAvailability = availabilitySlots.some((slot) => {
+            const slotStart = this._timeToMinutes(slot.startTime);
+            const slotEnd = this._timeToMinutes(slot.endTime);
+
+            return (
+                requestedStart >= slotStart &&
+                requestedEnd <= slotEnd
+            );
+        });
+
+        if (!isWithinAvailability) {
+            throw new Error(
+                "Selected time is outside consultant's available hours"
+            );
+        }
+
+        // Check for double-booking: overlapping time slots on the same date
+        const bookingStartMinutes = requestedStart;
+        const bookingEndMinutes = requestedEnd;
+
+        const conflictingBookings = await Booking.find({
+            consultantProfileId,
+            date,
+            status: { $in: [BOOKING_STATUS.PENDING, BOOKING_STATUS.CONFIRMED] },
+        });
+
+        for (const existingBooking of conflictingBookings) {
+            const existingStart = this._timeToMinutes(existingBooking.time);
+            const existingEnd = existingStart + existingBooking.duration;
+
+            if (
+                bookingStartMinutes < existingEnd &&
+                bookingEndMinutes > existingStart
+            ) {
+                throw new Error(
+                    "This time slot is already booked by another client"
+                );
+            }
+        }
+
         const booking = await Booking.create({
             clientId,
             consultantId,
@@ -43,6 +102,11 @@ class BookingService {
         });
 
         return booking;
+    }
+
+    _timeToMinutes(time) {
+        const [hours, minutes] = time.split(":").map(Number);
+        return hours * 60 + minutes;
     }
 
     async findById(id) {

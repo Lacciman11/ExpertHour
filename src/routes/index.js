@@ -5,6 +5,7 @@ import consultantProfileRoutes from "./consultant-profile.routes.js";
 import bookingRoutes from "./booking.routes.js";
 import categoryRoutes from "./category.routes.js";
 import paymentRoutes from "./payment.routes.js";
+import availabilityRoutes from "./availability.routes.js";
 
 const routes = [
     { path: "/api/v1/auth", router: authRoutes },
@@ -13,6 +14,7 @@ const routes = [
     { path: "/api/v1/bookings", router: bookingRoutes },
     { path: "/api/v1/categories", router: categoryRoutes },
     { path: "/api/v1/payments", router: paymentRoutes },
+    { path: "/api/v1/availability", router: availabilityRoutes },
     { path: "/auth", router: authPageRoutes },
 ];
 
