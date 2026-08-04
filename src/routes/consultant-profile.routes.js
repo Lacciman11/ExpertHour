@@ -7,6 +7,11 @@ import {
     updateConsultantProfile,
     searchConsultants,
     deleteConsultantProfile,
+    getMyAvailabilitySlots,
+    setMyAvailabilitySlots,
+    deleteMyAvailabilitySlot,
+    getPublicAvailabilitySlots,
+    getAvailableSlotsForDate,
 } from "../controllers/consultant-profile.controller.js";
 
 import {
@@ -37,6 +42,12 @@ router.get(
 
 // Get consultant profile by ID (public)
 router.get("/id/:id", getConsultantProfileById);
+
+// Get public availability slots for a consultant (public)
+router.get("/:id/availability", getPublicAvailabilitySlots);
+
+// Get available booking slots for a specific date (public)
+router.get("/:profileId/available-slots", getAvailableSlotsForDate);
 
 /*
 |--------------------------------------------------------------------------
@@ -70,6 +81,11 @@ protectedRouter.patch(
 
 // Delete my consultant profile
 protectedRouter.delete("/profile", deleteConsultantProfile);
+
+// Availability slots (embedded in profile)
+protectedRouter.get("/availability", getMyAvailabilitySlots);
+protectedRouter.post("/availability", setMyAvailabilitySlots);
+protectedRouter.delete("/availability/:index", deleteMyAvailabilitySlot);
 
 router.use(protectedRouter);
 

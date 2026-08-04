@@ -9,6 +9,23 @@ const consultantProfileSchema = new mongoose.Schema(
             unique: true,
         },
 
+        // Identity fields (denormalized for display performance)
+        firstName: {
+            type: String,
+            required: [true, "First name is required"],
+            trim: true,
+            minlength: 2,
+            maxlength: 50,
+        },
+
+        lastName: {
+            type: String,
+            required: [true, "Last name is required"],
+            trim: true,
+            minlength: 2,
+            maxlength: 50,
+        },
+
         bio: {
             type: String,
             required: [true, "Bio is required"],
@@ -47,6 +64,32 @@ const consultantProfileSchema = new mongoose.Schema(
             },
             default: "AVAILABLE",
         },
+
+        // Embedded availability slots (consolidated from ConsultantAvailability)
+        availabilitySlots: [
+            {
+                dayOfWeek: {
+                    type: Number,
+                    required: [true, "Day of week is required"],
+                    min: [0, "Day of week must be between 0 (Sunday) and 6 (Saturday)"],
+                    max: [6, "Day of week must be between 0 (Sunday) and 6 (Saturday)"],
+                },
+                startTime: {
+                    type: String,
+                    required: [true, "Start time is required"],
+                    match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, "Invalid time format (HH:MM)"],
+                },
+                endTime: {
+                    type: String,
+                    required: [true, "End time is required"],
+                    match: [/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, "Invalid time format (HH:MM)"],
+                },
+                isActive: {
+                    type: Boolean,
+                    default: true,
+                },
+            },
+        ],
 
         experience: {
             type: Number,

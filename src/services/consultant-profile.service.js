@@ -1,4 +1,5 @@
 import ConsultantProfile from "../models/ConsultantProfile.js";
+import Category from "../models/Category.js";
 
 class ConsultantProfileService {
 
@@ -32,7 +33,9 @@ class ConsultantProfileService {
 
     async findByUserId(userId) {
 
-        return await ConsultantProfile.findOne({ userId });
+        return await ConsultantProfile.findOne({ userId })
+            .populate("userId", "firstName lastName email avatar")
+            .populate("categories", "name");
 
     }
 
@@ -77,7 +80,6 @@ class ConsultantProfileService {
         if (filters.category) {
 
             // Find category ID by name, then filter consultants
-            const Category = (await import("../models/Category.js")).default;
             const categoryDoc = await Category.findOne({ name: filters.category });
             if (categoryDoc) {
                 query.categories = categoryDoc._id;
@@ -114,8 +116,8 @@ class ConsultantProfileService {
                         $or: [
                             { bio: searchRegex },
                             { location: searchRegex },
-                            { "userId.firstName": searchRegex },
-                            { "userId.lastName": searchRegex },
+                            { firstName: searchRegex },
+                            { lastName: searchRegex },
                             { "categories.name": searchRegex }
                         ]
                     }
@@ -235,6 +237,103 @@ class ConsultantProfileService {
         await profile.save();
 
         return profile;
+
+    }
+
+    // Availability slot methods (embedded in ConsultantProfile)
+
+    async getAvailabilitySlots(profileId) {
+
+        const profile = await ConsultantProfile.findById(profileId);
+
+        if (!profile) {
+
+            throw new Error("Consultant profile not found");
+
+        }
+
+        return profile.availabilitySlots.filter(slot => slot.isActive);
+
+    }
+
+    async setAvailabilitySlots(profileId, slots) {
+
+        const profile = await ConsultantProfile.findById(profileId);
+
+        if (!profile) {
+
+            throw new Error("Consultant profile not found");
+
+        }
+
+        // Validate time ranges
+        for (const slot of slots) {
+
+            if (this._timeToMinutes(slot.endTime) <= this._timeToMinutes(slot.startTime)) {
+
+                throw new Error("End time must be after start time");
+
+            }
+
+        }
+
+        profile.availabilitySlots = slots.map(slot => ({
+
+            dayOfWeek: slot.dayOfWeek,
+
+            startTime: slot.startTime,
+
+            endTime: slot.endTime,
+
+            isActive: true,
+
+        }));
+
+        await profile.save();
+
+        return profile.availabilitySlots;
+
+    }
+
+    async deleteAvailabilitySlot(profileId, slotIndex) {
+
+        const profile = await ConsultantProfile.findById(profileId);
+
+        if (!profile) {
+
+            throw new Error("Consultant profile not found");
+
+        }
+
+        if (slotIndex < 0 || slotIndex >= profile.availabilitySlots.length) {
+
+            throw new Error("Invalid slot index");
+
+        }
+
+        profile.availabilitySlots.splice(slotIndex, 1);
+
+        await profile.save();
+
+        return profile.availabilitySlots;
+
+    }
+
+    _timeToMinutes(time) {
+
+        const [hours, minutes] = time.split(":").map(Number);
+
+        return hours * 60 + minutes;
+
+    }
+
+    _minutesToTime(minutes) {
+
+        const hours = Math.floor(minutes / 60);
+
+        const mins = minutes % 60;
+
+        return `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
 
     }
 

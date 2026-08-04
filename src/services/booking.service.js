@@ -2,7 +2,6 @@ import mongoose from "mongoose";
 import Booking from "../models/Booking.js";
 import User from "../models/User.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
-import ConsultantAvailability from "../models/ConsultantAvailability.js";
 
 import { BOOKING_STATUS } from "../utils/constants.js";
 
@@ -35,11 +34,10 @@ class BookingService {
         const requestedDate = new Date(date);
         const dayOfWeek = requestedDate.getDay();
 
-        const availabilitySlots = await ConsultantAvailability.find({
-            consultantProfileId,
-            dayOfWeek,
-            isActive: true,
-        });
+        // Use embedded availability slots
+        const availabilitySlots = profile.availabilitySlots.filter(
+            slot => slot.dayOfWeek === dayOfWeek && slot.isActive
+        );
 
         if (availabilitySlots.length === 0) {
             throw new Error("Consultant is not available on this date");

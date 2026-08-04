@@ -5,7 +5,6 @@ import consultantProfileRoutes from "./consultant-profile.routes.js";
 import bookingRoutes from "./booking.routes.js";
 import categoryRoutes from "./category.routes.js";
 import paymentRoutes from "./payment.routes.js";
-import availabilityRoutes from "./availability.routes.js";
 import googleCalendarRoutes from "./google-calendar.routes.js";
 
 const routes = [
@@ -15,7 +14,6 @@ const routes = [
     { path: "/api/v1/bookings", router: bookingRoutes },
     { path: "/api/v1/categories", router: categoryRoutes },
     { path: "/api/v1/payments", router: paymentRoutes },
-    { path: "/api/v1/availability", router: availabilityRoutes },
     { path: "/api/v1/google-calendar", router: googleCalendarRoutes },
     { path: "/auth", router: authPageRoutes },
 ];
