@@ -45,7 +45,7 @@ const setAuthCookies = (res, accessToken, refreshToken) => {
 
 const authResponse = (res, statusCode, result) => {
 
-    const { accessToken, refreshToken, ...userResponse } = result;
+    const { accessToken, refreshToken, emailSent, ...userResponse } = result;
 
 
     return res.status(statusCode).json(
@@ -61,6 +61,8 @@ const authResponse = (res, statusCode, result) => {
                 accessToken,
 
                 refreshToken,
+
+                emailSent,
 
             },
 

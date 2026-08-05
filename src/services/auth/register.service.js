@@ -54,6 +54,8 @@ const register = async ({
     const verificationUrl =
         `${env.appUrl}/api/v1/auth/verify-email?token=${rawToken}`;
 
+    let emailSent = false;
+
     try {
 
         await emailService.send({
@@ -71,6 +73,8 @@ const register = async ({
             }),
 
         });
+
+        emailSent = true;
 
     } catch (error) {
 
@@ -119,6 +123,7 @@ const register = async ({
         user,
         accessToken,
         refreshToken,
+        emailSent,
     };
 };
 
