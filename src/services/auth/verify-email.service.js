@@ -31,8 +31,6 @@ class VerifyEmailService {
 
         const user = tokenDoc.user;
 
-        await emailVerificationTokenService.markAsVerified(tokenDoc._id);
-
         await emailVerificationTokenService.deleteUserTokens(user._id);
 
         await userService.update(user._id, {

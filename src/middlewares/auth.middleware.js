@@ -37,6 +37,12 @@ const authenticate = async (req, res, next) => {
 
         }
 
+        if (!user.isVerified) {
+
+            throw new ApiError(403, "Email not verified. Please verify your account before accessing this resource.")
+
+        }
+
         req.user = user
 
         next()

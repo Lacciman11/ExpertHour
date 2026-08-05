@@ -40,6 +40,12 @@ class RefreshTokenService {
 
         }
 
+        if (!user.isVerified) {
+
+            throw new ApiError(403, "Email not verified");
+
+        }
+
         const payload = {
             userId: user._id,
             role: user.role,

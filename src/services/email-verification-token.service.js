@@ -112,6 +112,11 @@ class EmailVerificationTokenService {
 
         }
 
+        // Mark the token as used immediately to prevent reuse
+        // (including concurrent requests with the same token)
+        token.verifiedAt = new Date();
+        await token.save();
+
         return {
 
             valid: true,

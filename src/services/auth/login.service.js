@@ -38,6 +38,13 @@ const login = async ({
         );
     }
 
+    if (!user.isVerified) {
+        throw new ApiError(
+            403,
+            "Email not verified. Please check your inbox and verify your account before signing in."
+        );
+    }
+
     const payload = {
         userId: user._id,
         role: user.role,

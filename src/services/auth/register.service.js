@@ -90,6 +90,11 @@ const register = async ({
 
         );
 
+        throw new ApiError(
+            500,
+            "Failed to send verification email. Please try again later."
+        );
+
     }
 
     const payload = {
