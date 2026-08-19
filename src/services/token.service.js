@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import authConfig from "../config/auth.js";
+import ApiError from "../utils/ApiError.js";
 
 class TokenService {
 
@@ -24,17 +25,25 @@ class TokenService {
     }
 
     verifyAccessToken(token) {
-        return jwt.verify(
-            token,
-            authConfig.accessToken.secret
-        );
+        try {
+            return jwt.verify(
+                token,
+                authConfig.accessToken.secret
+            );
+        } catch (error) {
+            throw new ApiError(401, "Invalid or expired access token");
+        }
     }
 
     verifyRefreshToken(token) {
-        return jwt.verify(
-            token,
-            authConfig.refreshToken.secret
-        );
+        try {
+            return jwt.verify(
+                token,
+                authConfig.refreshToken.secret
+            );
+        } catch (error) {
+            throw new ApiError(401, "Invalid or expired refresh token");
+        }
     }
 
     decodeToken(token) {

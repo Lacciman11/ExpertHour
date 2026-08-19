@@ -1,18 +1,20 @@
 import axios from "axios";
+import User from "../models/User.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
+import Booking from "../models/Booking.js";
+import env from "../config/env.js";
 
 class GoogleCalendarService {
 
     getGoogleAuthUrl() {
-        const clientId = process.env.GOOGLE_CLIENT_ID;
-        const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+        const { clientId, redirectUri } = env.googleCalendar;
         const scopes = [
             "https://www.googleapis.com/auth/calendar.events",
         ].join(" ");
 
         const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
             `client_id=${clientId}&` +
-            `redirect_uri=${redirectUri}&` +
+            `redirect_uri=${encodeURIComponent(redirectUri)}&` +
             `response_type=code&` +
             `scope=${encodeURIComponent(scopes)}&` +
             `access_type=offline&` +
@@ -22,29 +24,36 @@ class GoogleCalendarService {
     }
 
     async exchangeCodeForTokens(code) {
-        const clientId = process.env.GOOGLE_CLIENT_ID;
-        const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-        const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+        const { clientId, clientSecret, redirectUri } = env.googleCalendar;
 
-        const response = await axios.post(
-            "https://oauth2.googleapis.com/token",
-            new URLSearchParams({
-                code,
-                client_id: clientId,
-                client_secret: clientSecret,
-                redirect_uri: redirectUri,
-                grant_type: "authorization_code",
-            }).toString(),
-            {
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            }
-        );
+        if (!clientId || !clientSecret || !redirectUri) {
+            throw new Error("Google Calendar API credentials are not configured. Please set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI environment variables.");
+        }
 
-        return {
-            accessToken: response.data.access_token,
-            refreshToken: response.data.refresh_token,
-            expiresIn: response.data.expires_in,
-        };
+        try {
+            const response = await axios.post(
+                "https://oauth2.googleapis.com/token",
+                new URLSearchParams({
+                    code,
+                    client_id: clientId,
+                    client_secret: clientSecret,
+                    redirect_uri: redirectUri,
+                    grant_type: "authorization_code",
+                }).toString(),
+                {
+                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                }
+            );
+
+            return {
+                accessToken: response.data.access_token,
+                refreshToken: response.data.refresh_token,
+                expiresIn: response.data.expires_in,
+            };
+        } catch (error) {
+            const errorMessage = error.response?.data?.error_description || error.response?.data?.error || error.message;
+            throw new Error(`Failed to exchange authorization code for tokens: ${errorMessage}`);
+        }
     }
 
     async refreshAccessToken(refreshToken) {
@@ -64,41 +73,60 @@ class GoogleCalendarService {
             }
         );
 
-        return response.data.access_token;
+        return {
+            accessToken: response.data.access_token,
+            expiresIn: response.data.expires_in,
+        };
     }
 
-    async createEvent(consultantId, bookingId, date, time, duration) {
-        const profile = await ConsultantProfile.findOne({ userId: consultantId });
-
-        if (!profile || !profile.googleCalendar || !profile.googleCalendar.accessToken) {
+    async _getValidAccessToken(profile) {
+        if (!profile.googleCalendar || !profile.googleCalendar.accessToken) {
             throw new Error("Consultant has not connected Google Calendar");
         }
 
         let accessToken = profile.googleCalendar.accessToken;
 
-        // Check if token is expired
+        // Check if token is expired using expiresAt
         if (profile.googleCalendar.expiresAt && Date.now() > profile.googleCalendar.expiresAt) {
-            accessToken = await this.refreshAccessToken(profile.googleCalendar.refreshToken);
+            if (!profile.googleCalendar.refreshToken) {
+                throw new Error("No refresh token available. Please reconnect Google Calendar.");
+            }
 
-            // Update stored token
+            const refreshed = await this.refreshAccessToken(profile.googleCalendar.refreshToken);
+
+            accessToken = refreshed.accessToken;
+
+            // Update stored token with new expiry
             profile.googleCalendar.accessToken = accessToken;
-            profile.googleCalendar.expiresAt = Date.now() + (profile.googleCalendar.expiresIn || 3600) * 1000;
+            profile.googleCalendar.expiresAt = Date.now() + (refreshed.expiresIn || 3600) * 1000;
             await profile.save();
         }
 
-        const startTime = this._formatGoogleCalendarDateTime(date, time);
-        const endTime = this._calculateEndTime(date, time, duration);
+        return accessToken;
+    }
+
+    async createEvent(consultantId, bookingId, date, time, duration, timezone = "UTC") {
+        const profile = await ConsultantProfile.findOne({ userId: consultantId });
+
+        if (!profile) {
+            throw new Error("Consultant profile not found");
+        }
+
+        const accessToken = await this._getValidAccessToken(profile);
+
+        const startTime = this._formatGoogleCalendarDateTime(date, time, timezone);
+        const endTime = this._calculateEndTime(date, time, duration, timezone);
 
         const event = {
             summary: `ExpertHour Consultation - Booking #${bookingId}`,
             description: `Consultation session booked via ExpertHour`,
             start: {
                 dateTime: startTime,
-                timeZone: "UTC",
+                timeZone: timezone,
             },
             end: {
                 dateTime: endTime,
-                timeZone: "UTC",
+                timeZone: timezone,
             },
             conferenceData: {
                 createRequest: {
@@ -129,18 +157,156 @@ class GoogleCalendarService {
         return meetingLink;
     }
 
-    async createEventAndGetMeetLink(bookingId, date, time, duration, consultantId, clientId) {
-        return await this.createEvent(consultantId, bookingId, date, time, duration);
+    async updateEvent(consultantId, bookingId, date, time, duration, timezone = "UTC") {
+        const profile = await ConsultantProfile.findOne({ userId: consultantId });
+
+        if (!profile) {
+            throw new Error("Consultant profile not found");
+        }
+
+        const accessToken = await this._getValidAccessToken(profile);
+
+        // First, find the existing event
+        const searchResponse = await axios.get(
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                },
+                params: {
+                    q: `ExpertHour Consultation - Booking #${bookingId}`,
+                    maxResults: 1,
+                },
+            }
+        );
+
+        if (!searchResponse.data.items || searchResponse.data.items.length === 0) {
+            throw new Error("Google Calendar event not found for this booking");
+        }
+
+        const eventId = searchResponse.data.items[0].id;
+
+        const startTime = this._formatGoogleCalendarDateTime(date, time, timezone);
+        const endTime = this._calculateEndTime(date, time, duration, timezone);
+
+        // Update the event
+        const updatedEvent = {
+            start: {
+                dateTime: startTime,
+                timeZone: timezone,
+            },
+            end: {
+                dateTime: endTime,
+                timeZone: timezone,
+            },
+        };
+
+        const response = await axios.patch(
+            `https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`,
+            updatedEvent,
+            {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    "Content-Type": "application/json",
+                },
+            }
+        );
+
+        const meetingLink = response.data.hangoutLink || searchResponse.data.items[0].hangoutLink;
+
+        return meetingLink;
     }
 
-    _formatGoogleCalendarDateTime(dateStr, timeStr) {
+    async createEventAndGetMeetLink(bookingId, date, time, duration, consultantId, clientId) {
+        try {
+            // Get timezone from client or consultant
+            const [client, consultant] = await Promise.all([
+                User.findById(clientId).select("timezone"),
+                User.findById(consultantId).select("timezone"),
+            ]);
+
+            const timezone = client?.timezone || consultant?.timezone || "UTC";
+
+            return await this.createEvent(consultantId, bookingId, date, time, duration, timezone);
+        } catch (error) {
+            console.error(`[GoogleCalendar] Failed to create event for booking ${bookingId}:`, error.message);
+            // Return null to allow fallback to manual meeting link
+            return null;
+        }
+    }
+
+    async updateEventAndGetMeetLink(bookingId, date, time, duration, consultantId, clientId) {
+        try {
+            // Get timezone from client or consultant
+            const [client, consultant] = await Promise.all([
+                User.findById(clientId).select("timezone"),
+                User.findById(consultantId).select("timezone"),
+            ]);
+
+            const timezone = client?.timezone || consultant?.timezone || "UTC";
+
+            return await this.updateEvent(consultantId, bookingId, date, time, duration, timezone);
+        } catch (error) {
+            console.error(`[GoogleCalendar] Failed to update event for booking ${bookingId}:`, error.message);
+            // Return null to allow fallback
+            return null;
+        }
+    }
+
+    async deleteEvent(consultantId, bookingId) {
+        const profile = await ConsultantProfile.findOne({ userId: consultantId });
+
+        if (!profile || !profile.googleCalendar || !profile.googleCalendar.accessToken) {
+            // Consultant hasn't connected Google Calendar, nothing to delete
+            return;
+        }
+
+        try {
+            const accessToken = await this._getValidAccessToken(profile);
+
+            // Find the event by searching for it
+            const searchResponse = await axios.get(
+                "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+                {
+                    headers: {
+                        Authorization: `Bearer ${accessToken}`,
+                    },
+                    params: {
+                        q: `ExpertHour Consultation - Booking #${bookingId}`,
+                        maxResults: 1,
+                    },
+                }
+            );
+
+            if (searchResponse.data.items && searchResponse.data.items.length > 0) {
+                const eventId = searchResponse.data.items[0].id;
+
+                // Delete the event
+                await axios.delete(
+                    `https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`,
+                    {
+                        headers: {
+                            Authorization: `Bearer ${accessToken}`,
+                        },
+                    }
+                );
+
+                console.log(`[GoogleCalendar] Deleted event for booking ${bookingId}`);
+            }
+        } catch (error) {
+            console.error(`[GoogleCalendar] Failed to delete event for booking ${bookingId}:`, error.message);
+            // Don't throw - allow cancellation to proceed even if calendar deletion fails
+        }
+    }
+
+    _formatGoogleCalendarDateTime(dateStr, timeStr, timezone = "UTC") {
         const [hours, minutes] = timeStr.split(":").map(Number);
         const date = new Date(dateStr + "T00:00:00Z");
         date.setUTCHours(hours, minutes, 0, 0);
         return date.toISOString();
     }
 
-    _calculateEndTime(dateStr, timeStr, duration) {
+    _calculateEndTime(dateStr, timeStr, duration, timezone = "UTC") {
         const [hours, minutes] = timeStr.split(":").map(Number);
         const date = new Date(dateStr + "T00:00:00Z");
         date.setUTCHours(hours, minutes, 0, 0);

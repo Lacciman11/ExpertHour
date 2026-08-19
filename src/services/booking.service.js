@@ -2,8 +2,10 @@ import mongoose from "mongoose";
 import Booking from "../models/Booking.js";
 import User from "../models/User.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
+import googleCalendarService from "./google-calendar.service.js";
 
 import { BOOKING_STATUS } from "../utils/constants.js";
+import { koboToNaira } from "../utils/currency.js";
 
 class BookingService {
 
@@ -14,9 +16,13 @@ class BookingService {
             date,
             time,
             duration,
-            amount,
             notes,
         } = data;
+
+        // --- Duration validation ---
+        if (typeof duration !== "number" || !Number.isInteger(duration) || duration <= 0) {
+            throw new Error("Duration must be a positive integer (minutes)");
+        }
 
         const consultant = await User.findById(consultantId);
 
@@ -30,7 +36,24 @@ class BookingService {
             throw new Error("Consultant profile not found or inactive");
         }
 
-        // Check consultant availability for the requested date
+        // --- Currency enforcement ---
+        // ExpertHour Paystack payments are NGN-only.
+        // Do not silently convert USD or other currencies.
+        if (profile.currency !== "NGN") {
+            throw new Error(
+                `Consultant profile currency must be NGN for Paystack payments. Current currency: ${profile.currency}`
+            );
+        }
+
+        // --- Server-side price calculation ---
+        // hourlyRate is in NGN (e.g., 20000 = ₦20,000)
+        // duration is in minutes
+        // Formula: (hourlyRate × duration) / 60 = price in NGN
+        // Then convert to kobo: priceInNaira × 100
+        // Use Math.round for deterministic integer kobo result.
+        const priceInKobo = Math.round(profile.hourlyRate * duration * 100 / 60);
+
+        // --- Availability checks ---
         const requestedDate = new Date(date);
         const dayOfWeek = requestedDate.getDay();
 
@@ -94,7 +117,7 @@ class BookingService {
             date,
             time,
             duration,
-            amount,
+            amount: priceInKobo,
             notes: notes || "",
             status: BOOKING_STATUS.PENDING,
         });
@@ -108,10 +131,16 @@ class BookingService {
     }
 
     async findById(id) {
-        return await Booking.findById(id)
+        const booking = await Booking.findById(id)
             .populate("clientId", "firstName lastName email")
             .populate("consultantId", "firstName lastName email")
             .populate("consultantProfileId", "hourlyRate skills");
+
+        if (booking) {
+            booking.amount = koboToNaira(booking.amount);
+        }
+
+        return booking;
     }
 
     async findClientBookings(clientId, filters = {}) {
@@ -131,6 +160,11 @@ class BookingService {
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit);
+
+        // Convert kobo to Naira for API response
+        bookings.forEach(booking => {
+            booking.amount = koboToNaira(booking.amount);
+        });
 
         const total = await Booking.countDocuments(query);
 
@@ -161,6 +195,11 @@ class BookingService {
             .skip(skip)
             .limit(limit);
 
+        // Convert kobo to Naira for API response
+        bookings.forEach(booking => {
+            booking.amount = koboToNaira(booking.amount);
+        });
+
         const total = await Booking.countDocuments(query);
 
         return {
@@ -176,7 +215,7 @@ class BookingService {
         const now = new Date();
         const today = now.toISOString().split("T")[0];
 
-        return await Booking.find({
+        const bookings = await Booking.find({
             clientId,
             status: { $in: [BOOKING_STATUS.PENDING, BOOKING_STATUS.CONFIRMED] },
             date: { $gte: today },
@@ -185,6 +224,13 @@ class BookingService {
             .populate("consultantProfileId", "hourlyRate skills")
             .sort({ date: 1, time: 1 })
             .limit(5);
+
+        // Convert kobo to Naira for API response
+        bookings.forEach(booking => {
+            booking.amount = koboToNaira(booking.amount);
+        });
+
+        return bookings;
     }
 
     async updateStatus(id, status) {
@@ -201,14 +247,18 @@ class BookingService {
         return booking;
     }
 
-    async cancel(id, userId) {
+    async cancel(id, userId, cancelledBy = "client") {
         const booking = await Booking.findById(id);
 
         if (!booking) {
             throw new Error("Booking not found");
         }
 
-        if (booking.clientId.toString() !== userId.toString()) {
+        // Allow client, consultant, or admin to cancel
+        const isClient = booking.clientId.toString() === userId.toString();
+        const isConsultant = booking.consultantId.toString() === userId.toString();
+
+        if (!isClient && !isConsultant) {
             throw new Error("Not authorized to cancel this booking");
         }
 
@@ -221,7 +271,19 @@ class BookingService {
         }
 
         booking.status = BOOKING_STATUS.CANCELLED;
+        booking.cancelledAt = new Date();
+        booking.cancelledBy = isClient ? "client" : "consultant";
         await booking.save();
+
+        // Attempt to delete Google Calendar event if it exists
+        if (booking.meetingLink) {
+            try {
+                await googleCalendarService.deleteEvent(booking.consultantId, booking._id);
+            } catch (calendarError) {
+                console.error("Failed to delete Google Calendar event:", calendarError);
+                // Continue even if calendar deletion fails
+            }
+        }
 
         return booking;
     }
@@ -267,6 +329,11 @@ class BookingService {
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit);
+
+        // Convert kobo to Naira for API response
+        bookings.forEach(booking => {
+            booking.amount = koboToNaira(booking.amount);
+        });
 
         const total = await Booking.countDocuments(query);
 

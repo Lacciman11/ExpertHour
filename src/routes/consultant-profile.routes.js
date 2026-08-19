@@ -57,7 +57,7 @@ router.get("/:profileId/available-slots", getAvailableSlotsForDate);
 
 const protectedRouter = Router();
 
-protectedRouter.use(authenticate);
+protectedRouter.use(authenticate({ skipEmailVerification: true }));
 protectedRouter.use(authorize("CONSULTANT"));
 
 // Create consultant profile

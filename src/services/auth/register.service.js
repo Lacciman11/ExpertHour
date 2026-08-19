@@ -5,9 +5,8 @@ import ApiError from "../../utils/ApiError.js";
 import userService from "../user.service.js";
 import tokenService from "../token.service.js";
 import sessionService from "../session.service.js";
-import emailVerificationTokenService
-    from "../email-verification-token.service.js";
-import emailService from "../email/index.js";
+import emailVerificationTokenService from "../email-verification-token.service.js";
+import { emailService } from "../email/index.js";
 import verifyEmailTemplate
     from "../email/templates/verify-email.template.js";
 
@@ -17,6 +16,7 @@ const register = async ({
     email,
     password,
     role,
+    business,
     ipAddress,
     userAgent,
     deviceName,
@@ -28,13 +28,20 @@ const register = async ({
         throw new ApiError(409, "Email already exists");
     }
 
-    const user = await userService.create({
+    const userData = {
         firstName,
         lastName,
         email,
         password,
         role,
-    });
+    };
+
+    // Attach business data only for BUSINESS_OWNER role
+    if (role === "BUSINESS_OWNER" && business) {
+        userData.business = business;
+    }
+
+    const user = await userService.create(userData);
 
     const {
         rawToken,
@@ -56,45 +63,52 @@ const register = async ({
 
     let emailSent = false;
 
-    try {
+    // Send email in the background so the response is not blocked by SMTP timeouts
+    const sendVerificationEmail = async () => {
 
-        await emailService.send({
+        try {
 
-            to: user.email,
+            await emailService.send({
 
-            subject: "Verify your ExpertHour email",
+                to: user.email,
 
-            html: verifyEmailTemplate({
+                subject: "Verify your ExpertHour email",
 
-                firstName: user.firstName,
+                html: verifyEmailTemplate({
 
-                verificationUrl,
+                    firstName: user.firstName,
 
-            }),
+                    verificationUrl,
 
-        });
+                }),
 
-        emailSent = true;
+            });
 
-    } catch (error) {
+            emailSent = true;
 
-        console.error(
+        } catch (error) {
 
-            "Failed to send verification email:",
+            console.error(
 
-            {
+                "Failed to send verification email:",
 
-                userId: user._id.toString(),
+                {
 
-                email: user.email,
+                    userId: user._id.toString(),
 
-                error: error?.message || error,
+                    email: user.email,
 
-            }
+                    error: error?.message || error,
 
-        );
+                }
 
-    }
+            );
+
+        }
+
+    };
+
+    sendVerificationEmail();
 
     const payload = {
         userId: user._id,

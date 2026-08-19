@@ -26,7 +26,7 @@ const router = Router();
 |--------------------------------------------------------------------------
 */
 
-router.use(authenticate);
+router.use(authenticate({ skipEmailVerification: true }));
 
 router.get("/", getProfile);
 

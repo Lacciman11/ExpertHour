@@ -10,11 +10,15 @@ import morgan from "morgan";
 
 import env from "../config/env.js";
 import errorHandler from "./error.middleware.js";
+import correlationMiddleware from "./correlation.middleware.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const registerMiddlewares = (app) => {
+
+    // Correlation ID must be first so all subsequent middleware/handlers can use it.
+    app.use(correlationMiddleware);
 
     // Parse JSON requests
     app.use(express.json());

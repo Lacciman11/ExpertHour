@@ -77,6 +77,36 @@ export const createConsultantProfileValidator = [
         .isURL()
         .withMessage("LinkedIn must be a valid URL"),
 
+    body("avatar")
+        .optional()
+        .isObject()
+        .withMessage("Avatar must be an object"),
+
+    body("payoutMethod")
+        .optional()
+        .isIn(["paystack", "payoneer"])
+        .withMessage("Payout method must be paystack or payoneer"),
+
+    body("bankName")
+        .optional()
+        .isLength({ max: 100 })
+        .withMessage("Bank name cannot exceed 100 characters"),
+
+    body("accountNumber")
+        .optional()
+        .isLength({ max: 10 })
+        .withMessage("Account number cannot exceed 10 characters"),
+
+    body("accountName")
+        .optional()
+        .isLength({ max: 100 })
+        .withMessage("Account name cannot exceed 100 characters"),
+
+    body("payoneerId")
+        .optional()
+        .isLength({ max: 100 })
+        .withMessage("Payoneer ID cannot exceed 100 characters"),
+
 ];
 
 export const updateConsultantProfileValidator = [
@@ -157,6 +187,31 @@ export const updateConsultantProfileValidator = [
         .optional()
         .isURL()
         .withMessage("LinkedIn must be a valid URL"),
+
+    body("payoutMethod")
+        .optional()
+        .isIn(["paystack", "payoneer"])
+        .withMessage("Payout method must be paystack or payoneer"),
+
+    body("bankName")
+        .optional()
+        .isLength({ max: 100 })
+        .withMessage("Bank name cannot exceed 100 characters"),
+
+    body("accountNumber")
+        .optional()
+        .isLength({ max: 10 })
+        .withMessage("Account number cannot exceed 10 characters"),
+
+    body("accountName")
+        .optional()
+        .isLength({ max: 100 })
+        .withMessage("Account name cannot exceed 100 characters"),
+
+    body("payoneerId")
+        .optional()
+        .isLength({ max: 100 })
+        .withMessage("Payoneer ID cannot exceed 100 characters"),
 
 ];
 

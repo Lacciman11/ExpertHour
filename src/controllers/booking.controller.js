@@ -87,7 +87,9 @@ export const cancelBooking = asyncHandler(async (req, res) => {
 
     const { id } = req.params;
 
-    const booking = await bookingService.cancel(id, req.user._id);
+    const cancelledBy = req.user.role === "CONSULTANT" ? "consultant" : "client";
+
+    const booking = await bookingService.cancel(id, req.user._id, cancelledBy);
 
     return res.status(200).json(
         new ApiResponse(

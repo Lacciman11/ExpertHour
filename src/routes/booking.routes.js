@@ -36,7 +36,7 @@ const router = Router();
 |--------------------------------------------------------------------------
 */
 
-router.use(authenticate);
+router.use(authenticate());
 
 /*
 |--------------------------------------------------------------------------
@@ -86,7 +86,7 @@ router.patch(
 
 const consultantRouter = Router();
 
-consultantRouter.use(authenticate);
+consultantRouter.use(authenticate());
 consultantRouter.use(authorize("CONSULTANT"));
 
 consultantRouter.patch(
@@ -147,7 +147,7 @@ router.use("/consultant", consultantRouter);
 
 const adminRouter = Router();
 
-adminRouter.use(authenticate);
+adminRouter.use(authenticate());
 adminRouter.use(authorize("ADMIN"));
 
 adminRouter.get(

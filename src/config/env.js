@@ -1,6 +1,31 @@
-import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
+import fs from "fs";
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Read .env file manually to avoid issues with dotenv interceptors/extensions
+const envPath = path.join(__dirname, "../../.env");
+const envContent = fs.readFileSync(envPath, "utf8");
+const envVars = {};
+
+envContent.split("\n").forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) return;
+    const eqIndex = trimmed.indexOf("=");
+    if (eqIndex === -1) return;
+    const key = trimmed.slice(0, eqIndex).trim();
+    const value = trimmed.slice(eqIndex + 1).trim();
+    if (key) {
+        envVars[key] = value;
+    }
+});
+
+// Populate process.env with values from .env (overwrite to ensure correctness)
+Object.entries(envVars).forEach(([key, value]) => {
+    process.env[key] = value;
+});
 
 const env = {
     port: process.env.PORT || 5000,
@@ -31,6 +56,20 @@ const env = {
         cloudName: process.env.CLOUDINARY_CLOUD_NAME,
         apiKey: process.env.CLOUDINARY_API_KEY,
         apiSecret: process.env.CLOUDINARY_API_SECRET,
+    },
+
+    googleCalendar: {
+        clientId: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        redirectUri: process.env.GOOGLE_REDIRECT_URI,
+    },
+
+    paymentReconciliation: {
+        intervalMs: Number(process.env.PAYMENT_RECONCILIATION_INTERVAL_MS) || 60000,
+        delayMs: Number(process.env.PAYMENT_RECONCILIATION_DELAY_MS) || 300000,
+        processingTimeoutMs: Number(process.env.PAYMENT_PROCESSING_TIMEOUT_MS) || 300000,
+        maxAttempts: Number(process.env.PAYMENT_MAX_RECONCILIATION_ATTEMPTS) || 10,
+        batchSize: Number(process.env.PAYMENT_RECONCILIATION_BATCH_SIZE) || 20,
     },
 };
 

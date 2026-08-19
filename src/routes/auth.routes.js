@@ -124,14 +124,14 @@ router.post(
 
 router.post(
     "/logout-all",
-    authenticate,
+    authenticate(),
     logoutAllLimiter,
     logoutAll
 );
 
 router.get(
     "/me",
-    authenticate,
+    authenticate(),
     getCurrentUser
 );
 

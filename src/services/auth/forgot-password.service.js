@@ -4,7 +4,7 @@ import User from "../../models/User.js";
 
 import passwordResetTokenService from "../password-reset-token.service.js";
 
-import emailService from "../email/index.js";
+import {emailService} from "../email/index.js";
 
 import forgotPasswordTemplate from "../email/templates/forgot-password.template.js";
 
@@ -81,48 +81,55 @@ class ForgotPasswordService {
         | already been persisted above; a failed send is logged for retry.
         */
 
-        try {
+        // Send email in the background so the response is not blocked by SMTP timeouts
+        const sendResetEmail = async () => {
 
-            await emailService.send({
+            try {
 
-                to: user.email,
+                await emailService.send({
 
-                subject: "Reset your ExpertHour password",
+                    to: user.email,
 
-                html: forgotPasswordTemplate({
+                    subject: "Reset your ExpertHour password",
 
-                    firstName: user.firstName,
+                    html: forgotPasswordTemplate({
 
-                    resetUrl,
+                        firstName: user.firstName,
 
-                }),
+                        resetUrl,
 
-            });
+                    }),
 
-        } catch (error) {
+                });
 
-            /*
-            |------------------------------------------------------------------
-            | Delivery failed
-            |
-            | The token is already persisted, so we keep the generic success
-            | response to avoid email enumeration. We log with enough context
-            | (user id + email) so ops can alert/retry. The error is NOT
-            | re-thrown: the client must receive the same uniform response
-            | whether or not the email was delivered.
-            |------------------------------------------------------------------
-            */
+            } catch (error) {
 
-            console.error(
-                "Failed to send password reset email:",
-                {
-                    userId: user._id.toString(),
-                    email: user.email,
-                    error: error?.message || error,
-                }
-            );
+                /*
+                |------------------------------------------------------------------
+                | Delivery failed
+                |
+                | The token is already persisted, so we keep the generic success
+                | response to avoid email enumeration. We log with enough context
+                | (user id + email) so ops can alert/retry. The error is NOT
+                | re-thrown: the client must receive the same uniform response
+                | whether or not the email was delivered.
+                |------------------------------------------------------------------
+                */
 
-        }
+                console.error(
+                    "Failed to send password reset email:",
+                    {
+                        userId: user._id.toString(),
+                        email: user.email,
+                        error: error?.message || error,
+                    }
+                );
+
+            }
+
+        };
+
+        sendResetEmail();
 
     }
 

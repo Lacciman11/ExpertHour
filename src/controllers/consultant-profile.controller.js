@@ -50,7 +50,7 @@ export const getConsultantProfileById = asyncHandler(async (req, res) => {
 
     const profile = await consultantProfileService.findById(id, true);
 
-    if (!profile || !profile.isActive) {
+    if (!profile || !profile.isActive || profile.approvalStatus !== "approved") {
 
         return res.status(404).json({
 
@@ -235,7 +235,7 @@ export const getPublicAvailabilitySlots = asyncHandler(async (req, res) => {
 
     const profile = await consultantProfileService.findById(id);
 
-    if (!profile || !profile.isActive) {
+    if (!profile || !profile.isActive || profile.approvalStatus !== "approved") {
 
         return res.status(404).json({
 
@@ -279,7 +279,7 @@ export const getAvailableSlotsForDate = asyncHandler(async (req, res) => {
 
     const profile = await consultantProfileService.findById(profileId);
 
-    if (!profile || !profile.isActive) {
+    if (!profile || !profile.isActive || profile.approvalStatus !== "approved") {
 
         return res.status(404).json({
 

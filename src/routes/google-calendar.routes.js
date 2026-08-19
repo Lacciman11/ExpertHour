@@ -10,10 +10,10 @@ import authenticate from "../middlewares/auth.middleware.js";
 
 const router = Router();
 
-router.get("/auth-url", authenticate, getGoogleAuthUrl);
+router.get("/auth-url", authenticate(), getGoogleAuthUrl);
 
-router.post("/callback", authenticate, handleGoogleCallback);
+router.post("/callback", authenticate(), handleGoogleCallback);
 
-router.post("/disconnect", authenticate, disconnectGoogleCalendar);
+router.post("/disconnect", authenticate(), disconnectGoogleCalendar);
 
 export default router;

@@ -6,50 +6,56 @@ import ApiError from "../utils/ApiError.js";
 
 import User from "../models/User.js";
 
-const authenticate = async (req, res, next) => {
+const authenticate = (options = {}) => {
 
-    const authHeader = req.headers.authorization
+    const { skipEmailVerification = false } = options;
 
-    const tokenFromHeader = authHeader && authHeader.startsWith("Bearer ")
-        ? authHeader.slice(7)
-        : null
+    return async (req, res, next) => {
 
-    const accessToken = tokenFromHeader || req.cookies.accessToken
+        const authHeader = req.headers.authorization
 
-    if (!accessToken) {
+        const tokenFromHeader = authHeader && authHeader.startsWith("Bearer ")
+            ? authHeader.slice(7)
+            : null
 
-        throw new ApiError(401, "Unauthorized")
+        const accessToken = tokenFromHeader || req.cookies.accessToken
 
-    }
-
-    try {
-
-        const decoded = jwt.verify(
-            accessToken,
-            authConfig.accessToken.secret
-        )
-
-        const user = await User.findById(decoded.userId)
-
-        if (!user) {
+        if (!accessToken) {
 
             throw new ApiError(401, "Unauthorized")
 
         }
 
-        if (!user.isVerified) {
+        try {
 
-            throw new ApiError(403, "Email not verified. Please verify your account before accessing this resource.")
+            const decoded = jwt.verify(
+                accessToken,
+                authConfig.accessToken.secret
+            )
+
+            const user = await User.findById(decoded.userId)
+
+            if (!user) {
+
+                throw new ApiError(401, "Unauthorized")
+
+            }
+
+            if (!user.isVerified && !skipEmailVerification) {
+
+                throw new ApiError(403, "Email not verified. Please verify your account before accessing this resource.")
+
+            }
+
+            req.user = user
+
+            next()
+
+        } catch (error) {
+
+            throw new ApiError(401, "Invalid or expired token")
 
         }
-
-        req.user = user
-
-        next()
-
-    } catch (error) {
-
-        throw new ApiError(401, "Invalid or expired token")
 
     }
 

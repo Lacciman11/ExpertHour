@@ -1,5 +1,5 @@
 import authService from "./auth/index.js";
-import emailService from "./email/index.js";
+import {emailService} from "./email/index.js";
 
 import sessionService from "./session.service.js";
 import tokenService from "./token.service.js";

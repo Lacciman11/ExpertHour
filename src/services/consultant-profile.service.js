@@ -13,7 +13,7 @@ class ConsultantProfileService {
 
         }
 
-        return await ConsultantProfile.create({ userId, ...data });
+        return await ConsultantProfile.create({ userId, ...data, approvalStatus: "pending" });
 
     }
 
@@ -45,7 +45,7 @@ class ConsultantProfileService {
 
         const skip = (page - 1) * limit;
 
-        const query = { isActive: true };
+        const query = { isActive: true, approvalStatus: "approved" };
 
         if (filters.categories && filters.categories.length > 0) {
 

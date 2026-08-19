@@ -74,6 +74,58 @@ const userSchema = new mongoose.Schema(
             type: Date,
             default: null,
         },
+
+        timezone: {
+            type: String,
+            default: "UTC",
+        },
+
+        // Business owner specific fields
+        business: {
+            companyName: {
+                type: String,
+                trim: true,
+                maxlength: [100, "Company name cannot exceed 100 characters"],
+            },
+
+            industry: {
+                type: String,
+                trim: true,
+                maxlength: [100, "Industry cannot exceed 100 characters"],
+            },
+
+            companySize: {
+                type: String,
+                enum: {
+                    values: ["1-10", "11-50", "51-200", "201-500", "501-1000", "1000+"],
+                    message: "Invalid company size",
+                },
+            },
+
+            businessAddress: {
+                type: String,
+                trim: true,
+                maxlength: [200, "Business address cannot exceed 200 characters"],
+            },
+
+            phone: {
+                type: String,
+                trim: true,
+                maxlength: [20, "Phone number cannot exceed 20 characters"],
+            },
+
+            website: {
+                type: String,
+                trim: true,
+                maxlength: [200, "Website URL cannot exceed 200 characters"],
+            },
+
+            description: {
+                type: String,
+                trim: true,
+                maxlength: [500, "Description cannot exceed 500 characters"],
+            },
+        },
     },
     {
         timestamps: true,

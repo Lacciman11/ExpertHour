@@ -36,6 +36,31 @@ export const updateProfile = asyncHandler(async (req, res) => {
 
     }
 
+    // Handle nested business fields
+    if (req.body.business) {
+        updates.business = {};
+
+        const businessFields = [
+            "companyName",
+            "industry",
+            "companySize",
+            "businessAddress",
+            "phone",
+            "website",
+            "description",
+        ];
+
+        for (const field of businessFields) {
+
+            if (req.body.business[field] !== undefined) {
+
+                updates.business[field] = req.body.business[field];
+
+            }
+
+        }
+    }
+
     const user = await userService.updateProfile(req.user._id, updates);
 
     return res.status(200).json(

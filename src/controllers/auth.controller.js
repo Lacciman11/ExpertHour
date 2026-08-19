@@ -184,7 +184,7 @@ export const logout = asyncHandler(async (req, res) => {
         ? authHeader.slice(7)
         : null;
 
-    const refreshToken = req.body.refreshToken || tokenFromHeader || req.cookies.refreshToken;
+    const refreshToken = req.body?.refreshToken || req.cookies?.refreshToken;
 
     if (refreshToken) {
 
@@ -250,7 +250,7 @@ export const refreshToken = asyncHandler(async (req, res) => {
         ? authHeader.slice(7)
         : null;
 
-    const refreshToken = req.body.refreshToken || tokenFromHeader || req.cookies.refreshToken;
+    const refreshToken = req.body?.refreshToken || tokenFromHeader || req.cookies?.refreshToken;
 
     if (!refreshToken) {
 
@@ -260,9 +260,19 @@ export const refreshToken = asyncHandler(async (req, res) => {
 
     const result = await refreshTokenService.execute(refreshToken);
 
+    // Set updated cookies so subsequent requests use the new tokens
     setAuthCookies(res, result.accessToken, result.refreshToken);
 
-    return authResponse(res, 200, result);
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                accessToken: result.accessToken,
+                refreshToken: result.refreshToken,
+            },
+            "Token refreshed successfully"
+        )
+    );
 
 });
 

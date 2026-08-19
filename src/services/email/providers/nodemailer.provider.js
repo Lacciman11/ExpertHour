@@ -50,14 +50,16 @@ const getTransporter = async () => {
             pass: env.email.password,
         },
 
+        family: 4,
+
         tls: {
             servername: env.email.host,
             rejectUnauthorized: false,
         },
 
-        connectionTimeout: 30000,
-        greetingTimeout: 30000,
-        socketTimeout: 30000,
+        connectionTimeout: 60000,
+        greetingTimeout: 60000,
+        socketTimeout: 60000,
     });
 
     return transporter;

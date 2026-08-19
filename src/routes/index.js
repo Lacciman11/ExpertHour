@@ -6,6 +6,9 @@ import bookingRoutes from "./booking.routes.js";
 import categoryRoutes from "./category.routes.js";
 import paymentRoutes from "./payment.routes.js";
 import googleCalendarRoutes from "./google-calendar.routes.js";
+import adminRoutes from "./admin.routes.js";
+import reviewRoutes from "./review.routes.js";
+import consultationSessionRoutes from "./consultation-session.routes.js";
 
 const routes = [
     { path: "/api/v1/auth", router: authRoutes },
@@ -15,6 +18,9 @@ const routes = [
     { path: "/api/v1/categories", router: categoryRoutes },
     { path: "/api/v1/payments", router: paymentRoutes },
     { path: "/api/v1/google-calendar", router: googleCalendarRoutes },
+    { path: "/api/v1/admin", router: adminRoutes },
+    { path: "/api/v1/reviews", router: reviewRoutes },
+    { path: "/api/v1/sessions", router: consultationSessionRoutes },
     { path: "/auth", router: authPageRoutes },
 ];
 

@@ -35,9 +35,14 @@ const bookingSchema = new mongoose.Schema(
         duration: {
             type: Number,
             required: [true, "Duration is required"],
-            min: [1, "Duration must be at least 1 hour"],
+            min: [1, "Duration must be at least 1 minute"],
         },
 
+        /**
+         * Booking amount in kobo (smallest NGN unit).
+         * Calculated server-side from ConsultantProfile.hourlyRate × duration / 60.
+         * @type {number} Integer kobo value (e.g., 2000000 = ₦20,000)
+         */
         amount: {
             type: Number,
             required: [true, "Amount is required"],
@@ -68,13 +73,40 @@ const bookingSchema = new mongoose.Schema(
 
         paymentStatus: {
             type: String,
-            enum: ["pending", "paid", "failed"],
+            enum: ["pending", "paid", "failed", "refunded"],
             default: "pending",
         },
 
         paymentMethod: {
             type: String,
             default: "paystack",
+        },
+
+        paidAt: {
+            type: Date,
+            default: null,
+        },
+
+        refundStatus: {
+            type: String,
+            enum: ["none", "pending", "completed", "failed"],
+            default: "none",
+        },
+
+        refundedAt: {
+            type: Date,
+            default: null,
+        },
+
+        cancelledAt: {
+            type: Date,
+            default: null,
+        },
+
+        cancelledBy: {
+            type: String,
+            enum: ["client", "consultant", "admin"],
+            default: null,
         },
     },
     {

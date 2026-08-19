@@ -3,7 +3,7 @@ import env from "../../config/env.js";
 import emailVerificationTokenService
     from "../email-verification-token.service.js";
 
-import emailService from "../email/index.js";
+import {emailService} from "../email/index.js";
 
 import verifyEmailTemplate
     from "../email/templates/verify-email.template.js";
@@ -73,21 +73,50 @@ class VerifyEmailService {
         const verificationUrl =
             `${env.appUrl}/api/v1/auth/verify-email?token=${rawToken}`;
 
-        await emailService.send({
+        // Send email in the background so the response is not blocked by SMTP timeouts
+        const sendVerificationEmail = async () => {
 
-            to: user.email,
+            try {
 
-            subject: "Verify your ExpertHour email",
+                await emailService.send({
 
-            html: verifyEmailTemplate({
+                    to: user.email,
 
-                firstName: user.firstName,
+                    subject: "Verify your ExpertHour email",
 
-                verificationUrl,
+                    html: verifyEmailTemplate({
 
-            }),
+                        firstName: user.firstName,
 
-        });
+                        verificationUrl,
+
+                    }),
+
+                });
+
+            } catch (error) {
+
+                console.error(
+
+                    "Failed to send verification email:",
+
+                    {
+
+                        userId: user._id.toString(),
+
+                        email: user.email,
+
+                        error: error?.message || error,
+
+                    }
+
+                );
+
+            }
+
+        };
+
+        sendVerificationEmail();
 
     }
 

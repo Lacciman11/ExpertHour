@@ -26,6 +26,17 @@ const consultantProfileSchema = new mongoose.Schema(
             maxlength: 50,
         },
 
+        avatar: {
+            url: {
+                type: String,
+                default: "",
+            },
+            publicId: {
+                type: String,
+                default: "",
+            },
+        },
+
         bio: {
             type: String,
             required: [true, "Bio is required"],
@@ -41,19 +52,26 @@ const consultantProfileSchema = new mongoose.Schema(
             },
         },
 
+        /**
+         * Hourly rate in NGN (Naira).
+         * Example: 20000 = ₦20,000
+         * This is the source of truth for booking price calculation.
+         * The booking service converts this to kobo when creating bookings.
+         */
         hourlyRate: {
             type: Number,
             required: [true, "Hourly rate is required"],
             min: [0, "Hourly rate cannot be negative"],
         },
 
+        /**
+         * Currency code. NGN only for Paystack payments.
+         */
         currency: {
             type: String,
-            required: [true, "Currency is required"],
-            default: "USD",
+            enum: ["NGN"],
+            default: "NGN",
             uppercase: true,
-            minlength: 3,
-            maxlength: 3,
         },
 
         availability: {
@@ -146,6 +164,15 @@ const consultantProfileSchema = new mongoose.Schema(
             default: true,
         },
 
+        approvalStatus: {
+            type: String,
+            enum: {
+                values: ["pending", "approved", "rejected"],
+                message: "Approval status must be pending, approved, or rejected",
+            },
+            default: "pending",
+        },
+
         googleCalendar: {
             accessToken: {
                 type: String,
@@ -163,6 +190,35 @@ const consultantProfileSchema = new mongoose.Schema(
                 type: Boolean,
                 default: false,
             },
+        },
+
+        payoutMethod: {
+            type: String,
+            enum: {
+                values: ["paystack", "payoneer"],
+                message: "Payout method must be paystack or payoneer",
+            },
+            default: "paystack",
+        },
+
+        bankName: {
+            type: String,
+            maxlength: [100, "Bank name cannot exceed 100 characters"],
+        },
+
+        accountNumber: {
+            type: String,
+            maxlength: [10, "Account number cannot exceed 10 characters"],
+        },
+
+        accountName: {
+            type: String,
+            maxlength: [100, "Account name cannot exceed 100 characters"],
+        },
+
+        payoneerId: {
+            type: String,
+            maxlength: [100, "Payoneer ID cannot exceed 100 characters"],
         },
     },
     {

@@ -51,7 +51,7 @@ router.get(
 
 const adminRouter = Router();
 
-adminRouter.use(authenticate);
+adminRouter.use(authenticate());
 adminRouter.use(authorize("ADMIN"));
 
 // Create category
