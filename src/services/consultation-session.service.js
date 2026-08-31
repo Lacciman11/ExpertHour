@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 
 import ConsultationSession from "../models/ConsultationSession.js";
 import Booking from "../models/Booking.js";
+import consultantEarningService from "./consultant-earning.service.js";
+import { SESSION_OUTCOME } from "../utils/constants.js";
 
 class ConsultationSessionService {
 
@@ -103,7 +105,7 @@ class ConsultationSessionService {
 
         }
 
-        const session = await ConsultationSession.findOne({ bookingId });
+        let session = await ConsultationSession.findOne({ bookingId });
 
         if (!session) {
 
@@ -145,7 +147,55 @@ class ConsultationSessionService {
 
         );
 
+        // If session reached a terminal attendance state, create the earning
+        const terminalStatuses = [
+            "completed",
+            "no_show_client",
+            "no_show_consultant",
+        ];
+
+        if (terminalStatuses.includes(attendanceStatus)) {
+            const sessionOutcome = this._determineSessionOutcome(session, attendanceStatus);
+            await consultantEarningService.createEarningFromSession(bookingId, sessionOutcome);
+        }
+
         return session;
+
+    }
+
+    /**
+     * Determine the session outcome from attendance data.
+     * @param {object} session - ConsultationSession document
+     * @param {string} attendanceStatus - The terminal attendance status
+     * @returns {string} SESSION_OUTCOME value
+     */
+    _determineSessionOutcome(session, attendanceStatus) {
+        if (attendanceStatus === "no_show_client") {
+            return SESSION_OUTCOME.CUSTOMER_NO_SHOW;
+        }
+
+        if (attendanceStatus === "no_show_consultant") {
+            return SESSION_OUTCOME.CONSULTANT_NO_SHOW;
+        }
+
+        // For completed sessions, use attendance met flags when available
+        const clientMet = session.clientAttendanceMet;
+        const consultantMet = session.consultantAttendanceMet;
+
+        if (clientMet && consultantMet) {
+            return SESSION_OUTCOME.COMPLETED;
+        }
+
+        if (consultantMet && !clientMet) {
+            return SESSION_OUTCOME.CUSTOMER_INSUFFICIENT;
+        }
+
+        if (clientMet && !consultantMet) {
+            return SESSION_OUTCOME.CONSULTANT_INSUFFICIENT;
+        }
+
+        // Both false or undetermined
+        return SESSION_OUTCOME.NEITHER_MET;
 
     }
 

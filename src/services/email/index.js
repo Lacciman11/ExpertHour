@@ -3,6 +3,8 @@ import forgotPasswordTemplate from "./templates/forgot-password.template.js";
 import verifyEmailTemplate from "./templates/verify-email.template.js";
 import paymentSuccessTemplate from "./templates/payment-success.template.js";
 import paymentFailureTemplate from "./templates/payment-failure.template.js";
+import paymentSuccessConsultantTemplate from "./templates/payment-success.consultant.template.js";
+import paymentFailureConsultantTemplate from "./templates/payment-failure.consultant.template.js";
 
 export {
     emailService,
@@ -10,4 +12,6 @@ export {
     verifyEmailTemplate,
     paymentSuccessTemplate,
     paymentFailureTemplate,
+    paymentSuccessConsultantTemplate,
+    paymentFailureConsultantTemplate,
 };

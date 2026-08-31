@@ -2,10 +2,14 @@ import mongoose from "mongoose";
 import Booking from "../models/Booking.js";
 import User from "../models/User.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
+import ConsultationSession from "../models/ConsultationSession.js";
+import consultantEarningService from "./consultant-earning.service.js";
 import googleCalendarService from "./google-calendar.service.js";
 
-import { BOOKING_STATUS } from "../utils/constants.js";
+import { BOOKING_STATUS, REFUND_ELIGIBILITY } from "../utils/constants.js";
 import { koboToNaira } from "../utils/currency.js";
+
+const CANCELLATION_WINDOW_HOURS = 36;
 
 class BookingService {
 
@@ -247,33 +251,67 @@ class BookingService {
         return booking;
     }
 
-    async cancel(id, userId, cancelledBy = "client") {
+    /**
+     * Cancel a booking with reason and refund eligibility calculation.
+     *
+     * @param {string} id - Booking ID
+     * @param {string} userId - User performing the cancellation
+     * @param {Object} options - Cancellation options
+     * @param {string} options.reason - Required cancellation reason
+     * @param {string} [options.actor] - "client", "consultant", or "admin" (auto-detected if not provided)
+     * @returns {Object} Cancelled booking with refund eligibility
+     */
+    async cancel(id, userId, options = {}) {
+        const { reason, actor } = options;
+
         const booking = await Booking.findById(id);
 
         if (!booking) {
             throw new Error("Booking not found");
         }
 
-        // Allow client, consultant, or admin to cancel
+        // Determine who is cancelling
         const isClient = booking.clientId.toString() === userId.toString();
         const isConsultant = booking.consultantId.toString() === userId.toString();
 
-        if (!isClient && !isConsultant) {
+        // Auto-detect actor if not explicitly provided
+        let cancelActor = actor;
+        if (!cancelActor) {
+            if (isClient) cancelActor = "client";
+            else if (isConsultant) cancelActor = "consultant";
+        }
+
+        // Authorization check
+        if (!isClient && !isConsultant && cancelActor !== "admin") {
             throw new Error("Not authorized to cancel this booking");
         }
 
-        if (booking.status === BOOKING_STATUS.CANCELLED) {
-            throw new Error("Booking is already cancelled");
+        // Validate booking can be cancelled
+        this._validateCancellationEligibility(booking);
+
+        // Validate cancellation reason is provided
+        if (!reason || typeof reason !== "string" || reason.trim().length === 0) {
+            throw new Error("Cancellation reason is required");
         }
 
-        if (booking.status === BOOKING_STATUS.COMPLETED) {
-            throw new Error("Cannot cancel a completed booking");
-        }
+        // Calculate refund eligibility based on 36-hour rule
+        const refundEligibility = this._calculateRefundEligibility(booking);
 
+        // Perform cancellation
         booking.status = BOOKING_STATUS.CANCELLED;
         booking.cancelledAt = new Date();
-        booking.cancelledBy = isClient ? "client" : "consultant";
+        booking.cancelledBy = cancelActor;
+        booking.cancellationReason = reason.trim();
+        booking.refundEligibility = refundEligibility;
         await booking.save();
+
+        // Increment consultant cancellation count if consultant cancelled
+        if (cancelActor === "consultant") {
+            await this._incrementConsultantCancellationCount(booking.consultantId);
+        }
+
+        // If an earning exists for this booking, mark it as CANCELLED
+        await consultantEarningService.cancelEarningForBooking(booking._id);
 
         // Attempt to delete Google Calendar event if it exists
         if (booking.meetingLink) {
@@ -286,6 +324,73 @@ class BookingService {
         }
 
         return booking;
+    }
+
+    /**
+     * Validate that a booking is eligible for cancellation.
+     * @param {Object} booking - Booking document
+     */
+    _validateCancellationEligibility(booking) {
+        if (booking.status === BOOKING_STATUS.CANCELLED) {
+            throw new Error("Booking is already cancelled");
+        }
+
+        if (booking.status === BOOKING_STATUS.COMPLETED) {
+            throw new Error("Cannot cancel a completed booking");
+        }
+    }
+
+    /**
+     * Calculate refund eligibility based on 36-hour cancellation window.
+     *
+     * Rules:
+     * - Cancellation ≥36 hours before session = full refund
+     * - Cancellation <36 hours before session = no refund
+     * - Exactly 36 hours = full refund
+     *
+     * @param {Object} booking - Booking document
+     * @returns {string} REFUND_ELIGIBILITY.FULL or REFUND_ELIGIBILITY.NONE
+     */
+    _calculateRefundEligibility(booking) {
+        const now = new Date();
+        const sessionStartTime = this._getSessionStartTime(booking.date, booking.time);
+        const hoursUntilSession = (sessionStartTime.getTime() - now.getTime()) / (1000 * 60 * 60);
+
+        if (hoursUntilSession >= CANCELLATION_WINDOW_HOURS) {
+            return REFUND_ELIGIBILITY.FULL;
+        }
+
+        return REFUND_ELIGIBILITY.NONE;
+    }
+
+    /**
+     * Calculate session start time from date and time strings.
+     * @param {string} date - Date string (YYYY-MM-DD)
+     * @param {string} time - Time string (HH:MM)
+     * @returns {Date} Session start time
+     */
+    _getSessionStartTime(date, time) {
+        const [hours, minutes] = time.split(":").map(Number);
+        // Parse as local time (Nigeria is UTC+1)
+        const sessionDate = new Date(`${date}T${time}:00+01:00`);
+        return sessionDate;
+    }
+
+    /**
+     * Increment the consultant's cancellation count.
+     * @param {string} consultantId - Consultant user ID
+     */
+    async _incrementConsultantCancellationCount(consultantId) {
+        try {
+            await ConsultantProfile.findOneAndUpdate(
+                { userId: consultantId },
+                { $inc: { cancellationCount: 1 } },
+                { new: true }
+            );
+        } catch (error) {
+            console.error("Failed to increment consultant cancellation count:", error);
+            // Non-blocking: cancellation should still succeed
+        }
     }
 
     async generateMeetingLink(id) {
@@ -323,7 +428,6 @@ class BookingService {
         const skip = (page - 1) * limit;
 
         const bookings = await Booking.find(query)
-            .populate("clientId", "firstName lastName email")
             .populate("consultantId", "firstName lastName email")
             .populate("consultantProfileId", "hourlyRate skills")
             .sort({ createdAt: -1 })
@@ -397,98 +501,6 @@ class BookingService {
         };
     }
 
-    async getPendingRequests(consultantId) {
-        return await Booking.find({
-            consultantId,
-            status: BOOKING_STATUS.PENDING,
-        })
-            .populate("clientId", "firstName lastName email")
-            .populate("consultantProfileId", "hourlyRate skills")
-            .sort({ createdAt: -1 });
-    }
-
-    async getConsultantUpcomingSessions(consultantId) {
-        const now = new Date();
-        const today = now.toISOString().split("T")[0];
-
-        return await Booking.find({
-            consultantId,
-            status: { $in: [BOOKING_STATUS.CONFIRMED] },
-            date: { $gte: today },
-        })
-            .populate("clientId", "firstName lastName")
-            .populate("consultantProfileId", "hourlyRate skills")
-            .sort({ date: 1, time: 1 })
-            .limit(5);
-    }
-
-    async getEarningsSummary(consultantId) {
-        const now = new Date();
-        const today = now.toISOString().split("T")[0];
-
-        // This week (last 7 days)
-        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-        const thisWeekRevenue = await Booking.aggregate([
-            {
-                $match: {
-                    consultantId: new mongoose.Types.ObjectId(consultantId),
-                    status: BOOKING_STATUS.COMPLETED,
-                    date: { $gte: weekAgo, $lte: today },
-                },
-            },
-            {
-                $group: {
-                    _id: null,
-                    total: { $sum: "$amount" },
-                },
-            },
-        ]);
-
-        // This month
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
-        const thisMonthRevenue = await Booking.aggregate([
-            {
-                $match: {
-                    consultantId: new mongoose.Types.ObjectId(consultantId),
-                    status: BOOKING_STATUS.COMPLETED,
-                    date: { $gte: monthStart, $lte: today },
-                },
-            },
-            {
-                $group: {
-                    _id: null,
-                    total: { $sum: "$amount" },
-                },
-            },
-        ]);
-
-        // Total (all time)
-        const totalRevenueResult = await Booking.aggregate([
-            {
-                $match: {
-                    consultantId: new mongoose.Types.ObjectId(consultantId),
-                    status: BOOKING_STATUS.COMPLETED,
-                },
-            },
-            {
-                $group: {
-                    _id: null,
-                    total: { $sum: "$amount" },
-                },
-            },
-        ]);
-
-        const thisWeek = thisWeekRevenue.length > 0 ? thisWeekRevenue[0].total : 0;
-        const thisMonth = thisMonthRevenue.length > 0 ? thisMonthRevenue[0].total : 0;
-        const total = totalRevenueResult.length > 0 ? totalRevenueResult[0].total : 0;
-
-        return {
-            thisWeek,
-            thisMonth,
-            total,
-        };
-    }
-
     async acceptBooking(id, consultantId) {
         const booking = await Booking.findById(id);
 
@@ -527,6 +539,9 @@ class BookingService {
 
         booking.status = BOOKING_STATUS.CANCELLED;
         await booking.save();
+
+        // If an earning exists for this booking, mark it as CANCELLED
+        await consultantEarningService.cancelEarningForBooking(booking._id);
 
         return booking;
     }

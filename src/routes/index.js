@@ -9,6 +9,8 @@ import googleCalendarRoutes from "./google-calendar.routes.js";
 import adminRoutes from "./admin.routes.js";
 import reviewRoutes from "./review.routes.js";
 import consultationSessionRoutes from "./consultation-session.routes.js";
+import consultantEarningRoutes from "./consultant-earning.routes.js";
+import payoutRoutes from "./payout.routes.js";
 
 const routes = [
     { path: "/api/v1/auth", router: authRoutes },
@@ -21,6 +23,8 @@ const routes = [
     { path: "/api/v1/admin", router: adminRoutes },
     { path: "/api/v1/reviews", router: reviewRoutes },
     { path: "/api/v1/sessions", router: consultationSessionRoutes },
+    { path: "/api/v1/earnings", router: consultantEarningRoutes },
+    { path: "/api/v1/payouts", router: payoutRoutes },
     { path: "/auth", router: authPageRoutes },
 ];
 

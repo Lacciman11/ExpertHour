@@ -5,7 +5,13 @@ import Booking from "../models/Booking.js";
 import Payment from "../models/Payment.js";
 import User from "../models/User.js";
 import googleCalendarService from "./google-calendar.service.js";
-import { emailService, paymentSuccessTemplate, paymentFailureTemplate } from "./email/index.js";
+import {
+    emailService,
+    paymentSuccessTemplate,
+    paymentFailureTemplate,
+    paymentSuccessConsultantTemplate,
+    paymentFailureConsultantTemplate,
+} from "./email/index.js";
 import { koboToNaira } from "../utils/currency.js";
 import paymentLogger from "../utils/logger.js";
 
@@ -1592,192 +1598,9 @@ class PaymentService {
 
     }
 
-    async initiateRefund(paymentId, amount, userId) {
-
-        const payment = await Payment.findById(paymentId);
-
-        if (!payment) {
-
-            throw new Error("Payment not found");
-
-        }
-
-        if (payment.status !== "success") {
-
-            throw new Error("Cannot refund a payment that is not successful");
-
-        }
-
-        if (payment.refundStatus === "completed" || payment.refundStatus === "pending") {
-
-            throw new Error("Payment has already been refunded");
-
-        }
-
-        // Convert Naira to kobo for comparison with stored payment amount
-        const amountInKobo = amount ? Math.round(amount * 100) : null;
-
-        if (amountInKobo && amountInKobo > payment.amount) {
-
-            throw new Error("Refund amount cannot exceed payment amount");
-
-        }
-
-        // Convert Naira to kobo for Paystack API and storage
-        const refundAmountInKobo = amountInKobo || payment.amount;
-
-        try {
-
-            const response = await paystackClient.request("POST", "/refund", {
-                transaction: payment.reference,
-                amount: refundAmountInKobo,
-            });
-
-            payment.refundStatus = "pending";
-            payment.refundAmount = refundAmountInKobo;
-            payment.refundReference = response.data.data.reference;
-            payment.refundResponse = response.data;
-            await payment.save();
-
-            // Update booking refund status
-            const booking = await Booking.findById(payment.bookingId);
-            if (booking) {
-                booking.refundStatus = "pending";
-                await booking.save();
-            }
-
-            paymentLogger.info("payment_refund_initiated", {
-
-                event: "payment_refund_initiated",
-
-                paymentId: paymentId.toString(),
-
-                refundReference: response.data.data.reference,
-
-            });
-
-            // Convert kobo to Naira for API response
-            const displayPayment = {
-                ...payment.toObject(),
-                amount: koboToNaira(payment.amount),
-                refundAmount: koboToNaira(payment.refundAmount),
-            };
-
-            return {
-
-                success: true,
-
-                payment: displayPayment,
-
-                refund: response.data,
-
-            };
-
-        } catch (error) {
-
-            paymentLogger.error("payment_refund_initiation_failed", {
-
-                event: "payment_refund_initiation_failed",
-
-                paymentId: paymentId.toString(),
-
-                error: error.message,
-
-            });
-
-            throw new Error("Failed to initiate refund: " + error.message);
-
-        }
-
-    }
-
-    async checkRefundStatus(paymentId) {
-
-        const payment = await Payment.findById(paymentId);
-
-        if (!payment) {
-
-            throw new Error("Payment not found");
-
-        }
-
-        if (!payment.refundReference) {
-
-            throw new Error("No refund has been initiated for this payment");
-
-        }
-
-        try {
-
-            const response = await paystackClient.request("GET", `/refund/${payment.refundReference}`);
-
-            const refundData = response.data;
-
-            if (refundData.data && refundData.data.status === "success") {
-
-                payment.refundStatus = "completed";
-                payment.refundedAt = new Date();
-                payment.refundResponse = refundData;
-                await payment.save();
-
-                // Update booking
-                const booking = await Booking.findById(payment.bookingId);
-                if (booking) {
-                    booking.refundStatus = "completed";
-                    booking.refundedAt = new Date();
-                    booking.paymentStatus = "refunded";
-                    await booking.save();
-                }
-
-            } else if (refundData.data && refundData.data.status === "failed") {
-
-                payment.refundStatus = "failed";
-                payment.refundResponse = refundData;
-                await payment.save();
-
-                // Update booking
-                const booking = await Booking.findById(payment.bookingId);
-                if (booking) {
-                    booking.refundStatus = "failed";
-                    await booking.save();
-                }
-
-            }
-
-            paymentLogger.info("payment_refund_status_checked", {
-
-                event: "payment_refund_status_checked",
-
-                paymentId: paymentId.toString(),
-
-            });
-
-            // Convert kobo to Naira for API response
-            const displayPayment = {
-                ...payment.toObject(),
-                amount: koboToNaira(payment.amount),
-                refundAmount: koboToNaira(payment.refundAmount),
-            };
-
-            return {
-
-                success: true,
-
-                payment: displayPayment,
-
-                refund: refundData.data,
-
-            };
-
-        } catch (error) {
-
-            console.error(`[Payment] Failed to check refund status for payment ${paymentId}:`, error.message);
-
-            throw new Error("Failed to check refund status: " + error.message);
-
-        }
-
-    }
+    // NOTE: Refund processing has been moved to RefundService.
+    // Use refundService.processRefund() or refundService.processRefundWithPaystack()
+    // to ensure ConsultantEarning adjustment fields and refundHistory are updated.
 
     async _sendPaymentSuccessEmails(booking, meetingLink, reference) {
 
@@ -1856,15 +1679,12 @@ class PaymentService {
 
             });
 
-            // Send email to consultant
-            // booking.amount is in kobo; convert to Naira for display
-            const consultantHtml = paymentSuccessTemplate({
+            // Send email to consultant (no amount or payment reference per privacy policy)
+            const consultantHtml = paymentSuccessConsultantTemplate({
 
                 clientName: `${client.firstName} ${client.lastName}`,
 
                 consultantName: consultant.firstName,
-
-                amount: (booking.amount / 100).toFixed(2),
 
                 date,
 
@@ -1873,8 +1693,6 @@ class PaymentService {
                 duration: booking.duration,
 
                 meetingLink,
-
-                reference,
 
             });
 
@@ -1973,21 +1791,16 @@ class PaymentService {
 
             });
 
-            // Send email to consultant
-            // booking.amount is in kobo; convert to Naira for display
-            const consultantHtml = paymentFailureTemplate({
+            // Send email to consultant (no amount or payment reference per privacy policy)
+            const consultantHtml = paymentFailureConsultantTemplate({
 
                 clientName: `${client.firstName} ${client.lastName}`,
 
                 consultantName: consultant.firstName,
 
-                amount: (booking.amount / 100).toFixed(2),
-
                 date,
 
                 time,
-
-                reference,
 
                 reason: "Client payment could not be processed.",
 
@@ -2038,5 +1851,7 @@ class PaymentService {
     }
 
 }
+
+export { paystackClient };
 
 export default new PaymentService();

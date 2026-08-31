@@ -3,6 +3,8 @@ import env, { validateEnv } from "./config/env.js";
 import connectDB from "./config/db.js";
 import Category from "./models/Category.js";
 import paymentReconciliationService from "./services/payment-reconciliation.service.js";
+import earningEligibilityService from "./services/earning-eligibility.service.js";
+import payoutProcessingService from "./services/payout-processing.service.js";
 
 const DEFAULT_CATEGORIES = [
     "Strategy",
@@ -47,9 +49,11 @@ const startServer = async () => {
                 ` Server running on http://localhost:${env.port}`
             );
 
-            // Start the payment reconciliation worker only after the server is listening
+            // Start background workers only after the server is listening
             // and the database connection is established.
             paymentReconciliationService.start();
+            earningEligibilityService.start();
+            payoutProcessingService.start();
         });
 
         // Graceful shutdown handlers
@@ -58,6 +62,8 @@ const startServer = async () => {
             console.log(`\n[Server] Received ${signal}, shutting down gracefully...`);
 
             paymentReconciliationService.stop();
+            earningEligibilityService.stop();
+            payoutProcessingService.stop();
 
             server.close(() => {
 

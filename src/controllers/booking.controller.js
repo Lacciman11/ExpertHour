@@ -86,16 +86,24 @@ export const getBookingById = asyncHandler(async (req, res) => {
 export const cancelBooking = asyncHandler(async (req, res) => {
 
     const { id } = req.params;
+    const { reason } = req.body;
 
-    const cancelledBy = req.user.role === "CONSULTANT" ? "consultant" : "client";
+    // Determine actor based on user role
+    const actor = req.user.role === "CONSULTANT" ? "consultant"
+        : req.user.role === "ADMIN" ? "admin"
+        : "client";
 
-    const booking = await bookingService.cancel(id, req.user._id, cancelledBy);
+    const booking = await bookingService.cancel(id, req.user._id, { reason, actor });
+
+    const message = booking.refundEligibility === "full"
+        ? "Booking cancelled successfully. Full refund eligible."
+        : "Booking cancelled successfully. No refund eligible.";
 
     return res.status(200).json(
         new ApiResponse(
             200,
             booking,
-            "Booking cancelled successfully"
+            message
         )
     );
 

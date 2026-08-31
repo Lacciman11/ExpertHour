@@ -80,9 +80,9 @@ router.post("/generate-meeting-link", generateMeetingLink);
 
 router.post("/retry/:bookingId", retryPayment);
 
-// Refund endpoints - require ADMIN or CONSULTANT role
-router.post("/refund/:paymentId", authorize("ADMIN", "CONSULTANT"), initiateRefund);
+// Refund endpoints - ADMIN only. Consultants and clients must not initiate refunds.
+router.post("/refund/:paymentId", authorize("ADMIN"), initiateRefund);
 
-router.get("/refund/:paymentId/status", authorize("ADMIN", "CONSULTANT"), checkRefundStatus);
+router.get("/refund/:paymentId/status", authorize("ADMIN"), checkRefundStatus);
 
 export default router;

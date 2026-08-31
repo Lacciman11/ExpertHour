@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-import { BOOKING_STATUS } from "../utils/constants.js";
+import { BOOKING_STATUS, CANCEL_ACTOR, REFUND_ELIGIBILITY } from "../utils/constants.js";
 
 const bookingSchema = new mongoose.Schema(
     {
@@ -106,6 +106,27 @@ const bookingSchema = new mongoose.Schema(
         cancelledBy: {
             type: String,
             enum: ["client", "consultant", "admin"],
+            default: null,
+        },
+
+        /**
+         * Reason provided by the cancelling party.
+         * Required when cancelling a booking.
+         */
+        cancellationReason: {
+            type: String,
+            maxlength: [500, "Cancellation reason cannot exceed 500 characters"],
+            default: "",
+        },
+
+        /**
+         * Refund eligibility based on cancellation timing.
+         * - "full" → cancelled ≥36 hours before session
+         * - "none" → cancelled <36 hours before session
+         */
+        refundEligibility: {
+            type: String,
+            enum: Object.values(REFUND_ELIGIBILITY),
             default: null,
         },
     },

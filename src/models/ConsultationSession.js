@@ -57,6 +57,71 @@ const consultationSessionSchema = new mongoose.Schema(
             type: Date,
             default: null,
         },
+
+        /**
+         * Attendance events tracking for join/leave history.
+         * Supports multiple join/leave periods per participant.
+         */
+        attendanceEvents: [
+            {
+                participant: {
+                    type: String,
+                    enum: ["client", "consultant"],
+                    required: [true, "Participant is required"],
+                },
+                joinedAt: {
+                    type: Date,
+                    required: [true, "Join timestamp is required"],
+                },
+                leftAt: {
+                    type: Date,
+                    default: null,
+                },
+                durationSeconds: {
+                    type: Number,
+                    default: 0,
+                    min: [0, "Duration cannot be negative"],
+                },
+            },
+        ],
+
+        /**
+         * Cumulative attendance duration for client in seconds.
+         * Calculated from attendanceEvents.
+         */
+        clientAttendanceDuration: {
+            type: Number,
+            default: 0,
+            min: [0, "Duration cannot be negative"],
+        },
+
+        /**
+         * Cumulative attendance duration for consultant in seconds.
+         * Calculated from attendanceEvents.
+         */
+        consultantAttendanceDuration: {
+            type: Number,
+            default: 0,
+            min: [0, "Duration cannot be negative"],
+        },
+
+        /**
+         * Whether client met the 80% attendance requirement.
+         * null = not yet determined, true = met, false = not met.
+         */
+        clientAttendanceMet: {
+            type: Boolean,
+            default: null,
+        },
+
+        /**
+         * Whether consultant met the 80% attendance requirement.
+         * null = not yet determined, true = met, false = not met.
+         */
+        consultantAttendanceMet: {
+            type: Boolean,
+            default: null,
+        },
     },
     {
         timestamps: true,

@@ -22,6 +22,7 @@ import {
     bookingIdParamValidator,
     bookingStatusQueryValidator,
     paginationQueryValidator,
+    cancelBookingValidator,
 } from "../validators/booking.validator.js";
 
 import validate from "../middlewares/validate.middleware.js";
@@ -74,6 +75,7 @@ router.get(
 router.patch(
     "/:id/cancel",
     bookingIdParamValidator,
+    cancelBookingValidator,
     validate,
     cancelBooking
 );

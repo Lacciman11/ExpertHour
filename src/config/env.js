@@ -71,6 +71,18 @@ const env = {
         maxAttempts: Number(process.env.PAYMENT_MAX_RECONCILIATION_ATTEMPTS) || 10,
         batchSize: Number(process.env.PAYMENT_RECONCILIATION_BATCH_SIZE) || 20,
     },
+
+    earningEligibility: {
+        intervalMs: Number(process.env.EARNING_ELIGIBILITY_INTERVAL_MS) || 60000,
+    },
+
+    payoutProcessing: {
+        intervalMs: Number(process.env.PAYOUT_PROCESSING_INTERVAL_MS) || 3600000,
+        delayMs: Number(process.env.PAYOUT_PROCESSING_DELAY_MS) || 300000,
+        processingTimeoutMs: Number(process.env.PAYOUT_PROCESSING_TIMEOUT_MS) || 600000,
+        maxAttempts: Number(process.env.PAYOUT_PROCESSING_MAX_ATTEMPTS) || 3,
+        batchSize: Number(process.env.PAYOUT_PROCESSING_BATCH_SIZE) || 20,
+    },
 };
 
 /*

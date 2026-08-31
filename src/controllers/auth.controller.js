@@ -250,7 +250,7 @@ export const refreshToken = asyncHandler(async (req, res) => {
         ? authHeader.slice(7)
         : null;
 
-    const refreshToken = req.body?.refreshToken || tokenFromHeader || req.cookies?.refreshToken;
+    const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken || tokenFromHeader;
 
     if (!refreshToken) {
 

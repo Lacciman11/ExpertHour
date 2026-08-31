@@ -69,3 +69,14 @@ export const paginationQueryValidator = [
         .isInt({ min: 1, max: 50 })
         .withMessage("Limit must be between 1 and 50"),
 ];
+
+export const cancelBookingValidator = [
+    body("reason")
+        .notEmpty()
+        .withMessage("Cancellation reason is required")
+        .isString()
+        .withMessage("Cancellation reason must be a string")
+        .isLength({ min: 1, max: 500 })
+        .withMessage("Cancellation reason must be between 1 and 500 characters")
+        .trim(),
+];

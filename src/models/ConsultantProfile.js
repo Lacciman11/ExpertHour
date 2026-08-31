@@ -220,6 +220,26 @@ const consultantProfileSchema = new mongoose.Schema(
             type: String,
             maxlength: [100, "Payoneer ID cannot exceed 100 characters"],
         },
+
+        /**
+         * Count of cancellations by this consultant.
+         * Used by the future penalty system.
+         */
+        cancellationCount: {
+            type: Number,
+            default: 0,
+            min: [0, "Cancellation count cannot be negative"],
+        },
+
+        /**
+         * Count of no-shows by this consultant.
+         * Used by the future penalty system.
+         */
+        noShowCount: {
+            type: Number,
+            default: 0,
+            min: [0, "No-show count cannot be negative"],
+        },
     },
     {
         timestamps: true,
