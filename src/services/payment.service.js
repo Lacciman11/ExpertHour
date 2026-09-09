@@ -14,6 +14,7 @@ import {
 } from "./email/index.js";
 import { koboToNaira } from "../utils/currency.js";
 import paymentLogger from "../utils/logger.js";
+import ApiError from "../utils/ApiError.js";
 
 /**
  * Payment reconciliation error with classification for HTTP mapping.
@@ -507,9 +508,11 @@ class PaymentService {
 
     }
 
-    async retryPayment(bookingId, userId) {
+    async retryPayment(bookingId, userId, correlationId) {
 
-        const booking = await Booking.findById(bookingId).populate("clientId", "email");
+        paymentLogger.setContext({ correlationId });
+
+        const booking = await Booking.findById(bookingId);
 
         if (!booking) {
 
@@ -523,18 +526,163 @@ class PaymentService {
 
         }
 
-        if (booking.paymentStatus === "paid") {
+        // Verify booking is eligible for payment — same guards as initializePayment.
+        if (booking.status === "cancelled") {
 
-            throw new Error("Payment already completed for this booking");
+            throw new Error("Cannot retry payment for a cancelled booking");
 
         }
 
-        const reference = `EXP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        if (booking.status === "completed") {
 
-        const clientEmail = booking.clientId?.email || "client@experthour.com";
+            throw new Error("Cannot retry payment for a completed booking");
+
+        }
+
+        // Check for existing successful payment (read-only, safe).
+        // Do not create another Paystack transaction if already paid.
+        const successfulPayment = await Payment.findOne({
+            bookingId: booking._id,
+            status: "success",
+        });
+
+        if (successfulPayment) {
+
+            paymentLogger.info("payment_retry_already_paid", {
+
+                event: "payment_retry_already_paid",
+
+                bookingId: booking._id.toString(),
+
+                reference: successfulPayment.reference,
+
+            });
+
+            return {
+
+                success: false,
+
+                message: "This booking has already been paid",
+
+                reference: successfulPayment.reference,
+
+                status: "success",
+
+            };
+
+        }
+
+        // Check for payment already being processed.
+        // A "processing" payment means reconciliation is in progress.
+        // Do not create another payment for the same booking.
+        const processingPayment = await Payment.findOne({
+            bookingId: booking._id,
+            status: "processing",
+        });
+
+        if (processingPayment) {
+
+            paymentLogger.info("payment_retry_already_processing", {
+
+                event: "payment_retry_already_processing",
+
+                bookingId: booking._id.toString(),
+
+                reference: processingPayment.reference,
+
+            });
+
+            return {
+
+                success: false,
+
+                message: "Payment is already being processed for this booking",
+
+                reference: processingPayment.reference,
+
+                status: "processing",
+
+            };
+
+        }
 
         // Use booking.amount directly — already stored in kobo
         const amountInKobo = booking.amount;
+
+        // Atomically claim a pending payment slot.
+        // The partial unique index on { bookingId: 1 } where status: "pending"
+        // ensures at most one pending payment per booking.
+        // If a pending payment already exists, it is reused (its reference is preserved).
+        // If two concurrent retry requests race, only one will insert; the other
+        // will get the existing pending document.
+        const reference = `EXP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+        let payment;
+        let claimed = false;
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+
+            try {
+
+                payment = await Payment.findOneAndUpdate(
+                    { bookingId: booking._id, status: "pending" },
+                    {
+                        $setOnInsert: {
+                            bookingId: booking._id,
+                            reference,
+                            amount: amountInKobo,
+                            currency: "NGN",
+                            status: "pending",
+                            paymentMethod: "paystack",
+                            clientId: booking.clientId,
+                            consultantId: booking.consultantId,
+                        },
+                    },
+                    { new: true, upsert: true }
+                );
+
+                claimed = true;
+                break;
+
+            } catch (error) {
+
+                // Duplicate key on partial unique index means another request
+                // created the pending payment between our find and insert.
+                // Retry to fetch the existing pending payment.
+                if (error.code === 11000 && attempt < 2) {
+
+                    paymentLogger.warn("payment_retry_race_condition", {
+
+                        event: "payment_retry_race_condition",
+
+                        bookingId: booking._id.toString(),
+
+                        attempt: attempt + 1,
+
+                    });
+
+                    await new Promise(resolve => setTimeout(resolve, 50 * (attempt + 1)));
+
+                    continue;
+
+                }
+
+                throw error;
+
+            }
+
+        }
+
+        if (!claimed || !payment) {
+
+            throw new Error("Failed to claim pending payment slot for retry");
+
+        }
+
+        // Call Paystack with the payment's reference.
+        // If this is a newly created payment, Paystack creates a new transaction.
+        // If this is an existing pending payment, Paystack returns the existing transaction.
+        const clientEmail = await getUserEmail(userId);
 
         const payload = {
 
@@ -542,7 +690,7 @@ class PaymentService {
 
             amount: amountInKobo,
 
-            reference,
+            reference: payment.reference,
 
             metadata: {
 
@@ -556,64 +704,82 @@ class PaymentService {
 
         };
 
+        let response;
+
         try {
 
-            const response = await paystackClient.request("POST", "/transaction/initialize", payload);
-
-            // Create new Payment record for retry — amount stored in kobo
-            const payment = await Payment.create({
-                bookingId: booking._id,
-                reference,
-                amount: amountInKobo,
-                currency: "NGN",
-                status: "pending",
-                paymentMethod: "paystack",
-                paystackTransactionId: response.data?.data?.id || null,
-                paystackResponse: response.data,
-                clientId: booking.clientId,
-                consultantId: booking.consultantId,
-            });
-
-            booking.paymentReference = reference;
-            booking.paymentStatus = "pending";
-            booking.refundStatus = "none";
-            await booking.save();
-
-            paymentLogger.info("payment_retry_success", {
-
-                event: "payment_retry_success",
-
-                bookingId: bookingId.toString(),
-
-                reference,
-
-            });
-
-            return {
-
-                authorizationUrl: response.data.authorization_url,
-
-                accessCode: response.data.access_code,
-
-                reference,
-
-            };
+            response = await paystackClient.request("POST", "/transaction/initialize", payload);
 
         } catch (error) {
 
-            paymentLogger.error("payment_retry_failed", {
+            paymentLogger.error("paystack_retry_initialization_failed", {
 
-                event: "payment_retry_failed",
+                event: "paystack_retry_initialization_failed",
 
-                bookingId: bookingId.toString(),
+                bookingId: booking._id.toString(),
+
+                reference: payment.reference,
 
                 error: error.message,
 
             });
 
+            // Payment remains in pending state — safe to retry.
+            // Do NOT mark booking as paid.
             throw new Error("Failed to retry payment: " + error.message);
 
         }
+
+        // Validate Paystack response before treating it as a valid initialization.
+        if (!isValidPaystackInitializeResponse(response)) {
+
+            paymentLogger.error("invalid_paystack_retry_response", {
+
+                event: "invalid_paystack_retry_response",
+
+                bookingId: booking._id.toString(),
+
+                reference: payment.reference,
+
+            });
+
+            // Payment remains in pending state — safe to retry.
+            throw new Error("Invalid Paystack initialization response for retry");
+
+        }
+
+        // Update payment with Paystack response data
+        payment.paystackTransactionId = response.data.data.id || null;
+        payment.paystackResponse = response.data;
+        await payment.save();
+
+        // Update booking with current payment reference
+        booking.paymentReference = payment.reference;
+        booking.paymentStatus = "pending";
+        booking.refundStatus = "none";
+        await booking.save();
+
+        paymentLogger.info("payment_retry_success", {
+
+            event: "payment_retry_success",
+
+            bookingId: bookingId.toString(),
+
+            reference: payment.reference,
+
+        });
+
+        return {
+
+            authorizationUrl: response.data.data.authorization_url,
+
+            accessCode: response.data.data.access_code,
+
+            reference: payment.reference,
+
+            status: "pending",
+
+        };
 
     }
 
@@ -1135,12 +1301,38 @@ class PaymentService {
 
     }
 
-    async verifyPayment(reference, correlationId) {
+    async verifyPayment(reference, userId, correlationId) {
 
         paymentLogger.setContext({ correlationId });
 
         try {
 
+            // 1. Find the payment and associated booking FIRST (before reconciliation)
+            //    so we can check ownership without modifying any state.
+            const payment = await Payment.findOne({ reference });
+
+            if (!payment) {
+                throw new ApiError(404, "Payment not found");
+            }
+
+            const booking = await Booking.findById(payment.bookingId);
+
+            if (!booking) {
+                throw new ApiError(404, "Booking not found for this payment");
+            }
+
+            // 2. Authorization: only the booking client or consultant may verify payment
+            const isClient = booking.clientId.toString() === userId.toString();
+            const isConsultant = booking.consultantId.toString() === userId.toString();
+
+            if (!isClient && !isConsultant) {
+                throw new ApiError(
+                    403,
+                    "Not authorized to verify this payment"
+                );
+            }
+
+            // 3. Now reconcile the payment (only if authorized)
             const result = await this.reconcilePayment(reference, correlationId);
 
             // Convert kobo to Naira for API response

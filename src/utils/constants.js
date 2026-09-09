@@ -110,3 +110,27 @@ export const PAYOUT_STATUS = Object.freeze({
 });
 
 export const MINIMUM_PAYOUT_KOBO = 1000000; // ₦10,000 in kobo
+
+// ---------------------------------------------------------------------------
+// Business Timezone
+// ---------------------------------------------------------------------------
+
+// ExpertHour is a Nigeria-only platform. Nigeria (Africa/Lagos) is permanently
+// UTC+1 and does not observe daylight saving time. This is the single source
+// of truth for the application business timezone.
+export const APP_TIMEZONE = "Africa/Lagos";
+
+// Africa/Lagos fixed UTC offset (no DST). Used to parse wall-clock booking
+// times (which are stored as local Lagos date/time strings) into absolute
+// instants. Kept as a named constant so business-rule code never contains a
+// magic inline "+01:00".
+export const APP_TIMEZONE_UTC_OFFSET = "+01:00";
+
+// ---------------------------------------------------------------------------
+// Cancellation Window
+// ---------------------------------------------------------------------------
+
+// 36-hour cancellation window expressed as an integer number of milliseconds.
+// Using integer timestamp arithmetic avoids floating-point hour calculations
+// (difference / (1000 * 60 * 60)) that are imprecise at the boundary.
+export const CANCELLATION_WINDOW_MS = 36 * 60 * 60 * 1000;

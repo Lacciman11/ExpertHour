@@ -8,6 +8,7 @@ import {
     retryPayment,
     initiateRefund,
     checkRefundStatus,
+    reconcileRefund,
 } from "../controllers/payment.controller.js";
 
 import validate from "../middlewares/validate.middleware.js";
@@ -84,5 +85,9 @@ router.post("/retry/:bookingId", retryPayment);
 router.post("/refund/:paymentId", authorize("ADMIN"), initiateRefund);
 
 router.get("/refund/:paymentId/status", authorize("ADMIN"), checkRefundStatus);
+
+// Refund reconciliation - ADMIN only. Repairs local state when a Paystack
+// refund succeeded externally but the local MongoDB transaction failed.
+router.post("/refund/:paymentId/reconcile", authorize("ADMIN"), reconcileRefund);
 
 export default router;

@@ -4,6 +4,7 @@ import Payment from "../models/Payment.js";
 import Booking from "../models/Booking.js";
 import ConsultantEarning from "../models/ConsultantEarning.js";
 import ApiError from "../utils/ApiError.js";
+import paymentLogger from "../utils/logger.js";
 import {
     EARNING_STATUS,
     ADJUSTMENT_REASON,
@@ -124,11 +125,24 @@ function validateRefundReason(reason) {
 
 /**
  * Calculate remaining refundable amount for an earning.
+ * For earnings with positive grossAmount, the refundable amount is bounded
+ * by the earning's grossAmount. For CANCELLED/zero-grossAmount earnings
+ * (e.g., consultant-attributable session outcomes), the refundable amount
+ * is bounded by the original payment amount.
+ *
  * @param {object} earning - The ConsultantEarning document
+ * @param {object} [payment] - The Payment document (optional, used for zero-grossAmount earnings)
  * @returns {number} Remaining refundable amount in kobo
  */
-function calculateRemainingRefundableAmount(earning) {
-    return earning.grossAmount - earning.adjustmentAmount;
+function calculateRemainingRefundableAmount(earning, payment) {
+    if (earning.grossAmount > 0) {
+        return earning.grossAmount - earning.adjustmentAmount;
+    }
+    // For CANCELLED/zero-grossAmount earnings, use payment amount as the bound.
+    // This allows system-initiated full refunds for consultant-attributable outcomes.
+    const paymentAmount = payment ? (payment.amount || 0) : 0;
+    const paymentRefunded = payment ? (payment.refundAmount || 0) : 0;
+    return paymentAmount - paymentRefunded;
 }
 
 /**
@@ -223,6 +237,37 @@ function findExistingRecovery(earning, refundReference) {
     ) || null;
 }
 
+/**
+ * Select the canonical Paystack-native refund id from a Payment document.
+ *
+ * The local `Payment.refundReference` is our local idempotency key
+ * (`REF-{ts}-{rand}`) and is NOT a Paystack-recognized identifier. Paystack's
+ * `GET /refund/:id` endpoint expects Paystack's own refund id, which is
+ * stored inside `Payment.refundResponse` (the full Paystack envelope captured
+ * after a successful `POST /refund`).
+ *
+ * Priority:
+ *   1. payment.refundResponse.data.id   — canonical Paystack native id.
+ *   2. payment.refundResponse.id        — defensive fallback if the envelope
+ *                                          is shaped differently.
+ *   3. null                              — caller must NOT fall back to
+ *                                          payment.refundReference.
+ *
+ * @param {object} payment - The Payment document
+ * @returns {string|number|null} Paystack-native refund id or null
+ */
+function selectPaystackRefundId(payment) {
+    if (!payment || !payment.refundResponse) return null;
+    const envelope = payment.refundResponse;
+    if (envelope.data && envelope.data.id !== undefined && envelope.data.id !== null) {
+        return envelope.data.id;
+    }
+    if (envelope.id !== undefined && envelope.id !== null) {
+        return envelope.id;
+    }
+    return null;
+}
+
 // ---------------------------------------------------------------------------
 // Post-Payout Recovery Processing
 // ---------------------------------------------------------------------------
@@ -277,6 +322,7 @@ async function processRecovery({
     reason,
     adminId,
     mongoSession,
+    previousPaymentRefundAmount,
 }) {
     // Idempotency: a recovery with the same reference must not be duplicated.
     const existingRecovery = findExistingRecovery(earning, refundReference);
@@ -294,7 +340,12 @@ async function processRecovery({
     const recoveryAmount = calculateRecoveryAmount(earning, refundAmount);
 
     // 1. Update payment refund fields (the client is still refunded).
-    const previousPaymentRefundAmount = payment.refundAmount || 0;
+    //    previousPaymentRefundAmount is the value of payment.refundAmount
+    //    BEFORE this refund is applied. The caller is responsible for passing
+    //    the correct value:
+    //      - From the local-only processRefund(): previous = (payment.refundAmount || 0).
+    //      - From processRefundWithPaystack(): the pre-transaction save (step 10b)
+    //        has already added refundAmount, so previous = payment.refundAmount - refundAmount.
     payment.refundAmount = previousPaymentRefundAmount + refundAmount;
 
     const isFullRefund = payment.refundAmount >= payment.amount;
@@ -422,6 +473,9 @@ class RefundService {
                         reason,
                         adminId,
                         mongoSession,
+                        // Local-only path: pre-TX save did not run, so the
+                        // "previous" value is just the current refundAmount.
+                        previousPaymentRefundAmount: payment.refundAmount || 0,
                     });
                 }
 
@@ -439,7 +493,7 @@ class RefundService {
                 }
 
                 // 9. Calculate remaining refundable amount
-                const remainingRefundableAmount = calculateRemainingRefundableAmount(earning);
+                const remainingRefundableAmount = calculateRemainingRefundableAmount(earning, payment);
 
                 // 9. Validate refund amount does not exceed remaining
                 validateRefundDoesNotExceedRemaining(refundAmount, remainingRefundableAmount);
@@ -643,7 +697,7 @@ class RefundService {
         // 8. For non-PAID earnings, validate refund against remaining refundable amount.
         //    (Recovery amounts are capped by consultantEntitlement instead.)
         if (!refundCheck.recovery) {
-            const remainingRefundableAmount = calculateRemainingRefundableAmount(earning);
+            const remainingRefundableAmount = calculateRemainingRefundableAmount(earning, payment);
 
             // 9. Validate refund amount does not exceed remaining
             validateRefundDoesNotExceedRemaining(refundAmount, remainingRefundableAmount);
@@ -661,14 +715,21 @@ class RefundService {
             throw new ApiError(500, `Failed to initiate refund with Paystack: ${error.message}`);
         }
 
-        // 10b. Preserve the Paystack refund reference on the Payment BEFORE the
-        //      MongoDB transaction. If the local transaction fails after this
-        //      point, the reference is retained so the successful external
-        //      refund can be reconciled later (see reconcileRefundWithPaystack).
-        //      Status "pending" here means: Paystack refund initiated, local
-        //      update not yet confirmed.
+        // 10b. Preserve the Paystack refund reference and amount on the Payment
+        //      BEFORE the MongoDB transaction. If the local transaction fails
+        //      after this point, the reference and amount are retained so the
+        //      successful external refund can be reconciled later (see
+        //      reconcileRefundWithPaystack). Status "pending" here means:
+        //      Paystack refund initiated, local update not yet confirmed.
+        //
+        //      The full Paystack response envelope is also stored so the
+        //      Paystack-native refund id (response.data.data.id) is available
+        //      for reconciliation. Stored shape follows the existing
+        //      convention used by payment.paystackResponse (see payment.service.js).
+        payment.refundAmount = (payment.refundAmount || 0) + refundAmount;
         payment.refundReference = refundReference;
         payment.refundStatus = "pending";
+        payment.refundResponse = paystackResponse;
         await payment.save();
 
         // 11. Update local state in transaction
@@ -692,6 +753,11 @@ class RefundService {
                         reason,
                         adminId,
                         mongoSession,
+                        // Pre-TX save (step 10b) already added refundAmount.
+                        // Pass the value BEFORE that addition so processRecovery
+                        // accumulates correctly without double-counting.
+                        previousPaymentRefundAmount:
+                            (paymentInTx.refundAmount || 0) - refundAmount,
                     });
 
                     // Attach the Paystack response for callers that need it.
@@ -770,9 +836,12 @@ class RefundService {
                 // Save earning
                 await earningInTx.save({ session: mongoSession });
 
-                // Update payment refund fields
-                const previousPaymentRefundAmount = paymentInTx.refundAmount || 0;
-                paymentInTx.refundAmount = previousPaymentRefundAmount + refundAmount;
+                // Update payment refund fields.
+                // refundAmount was already accumulated by the pre-transaction save
+                // (see processRefundWithPaystack step 10b). Do not add it again here.
+                if (paymentInTx.refundAmount === undefined) {
+                    paymentInTx.refundAmount = refundAmount;
+                }
 
                 // Determine if this is a full or partial refund
                 const isFullRefund = paymentInTx.refundAmount >= paymentInTx.amount;
@@ -862,12 +931,40 @@ class RefundService {
 
         const refundReference = payment.refundReference;
 
-        // 2. Query Paystack for the refund status (read-only).
+        // 2. Resolve the Paystack-native refund id from the persisted response.
+        //    The local REF-* reference is NOT a Paystack-recognized identifier
+        //    and must never be sent to Paystack.
+        const paystackRefundId = selectPaystackRefundId(payment);
+
+        if (paystackRefundId === null || paystackRefundId === undefined) {
+            // No native Paystack id was persisted (legacy record, or pre-fix
+            // call). We cannot safely query Paystack with the local REF-*
+            // value, so mark this Payment as failed and stop.
+            payment.refundStatus = "failed";
+            await payment.save();
+            paymentLogger.error("refund_reconciliation_missing_paystack_id", {
+                event: "refund_reconciliation_missing_paystack_id",
+                paymentId: payment._id.toString(),
+                refundReference,
+                reason:
+                    "Missing Paystack-native refund id; cannot reconcile automatically",
+            });
+            return {
+                success: true,
+                reconciled: false,
+                reason:
+                    "Missing Paystack-native refund id; cannot reconcile automatically",
+                paystackStatus: null,
+            };
+        }
+
+        // 3. Query Paystack for the refund status (read-only) using the
+        //    Paystack-native id.
         let paystackRefundStatus;
         try {
             const response = await paystackClient.request(
                 "GET",
-                `/refund/${refundReference}`
+                `/refund/${paystackRefundId}`
             );
             paystackRefundStatus = response.data?.data?.status || "unknown";
         } catch (error) {
@@ -945,6 +1042,11 @@ class RefundService {
                         reason: earningInTx.adjustmentReason || ADJUSTMENT_REASON.FULL_REFUND,
                         adminId: null, // Reconciliation is automatic, no admin
                         mongoSession,
+                        // paymentInTx.refundAmount was preserved by the original
+                        // pre-TX save. Pass the value BEFORE the current refund
+                        // addition so processRecovery accumulates correctly.
+                        previousPaymentRefundAmount:
+                            (paymentInTx.refundAmount || 0) - refundAmount,
                     });
                     return recoveryResult;
                 }
@@ -994,7 +1096,9 @@ class RefundService {
 
                 await earningInTx.save({ session: mongoSession });
 
-                const isFullRefund = paymentInTx.refundAmount >= paymentInTx.amount;
+                // The refundAmount was already preserved on the payment before the
+                // original transaction failed. Do not accumulate it again here.
+                const isFullRefund = refundAmount >= paymentInTx.amount;
                 paymentInTx.refundStatus = isFullRefund ? "completed" : "pending";
                 if (isFullRefund) {
                     paymentInTx.refundedAt = new Date();
@@ -1094,4 +1198,5 @@ class RefundService {
 // Export Singleton
 // ---------------------------------------------------------------------------
 
+export { selectPaystackRefundId };
 export default new RefundService();

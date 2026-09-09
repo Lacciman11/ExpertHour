@@ -3,7 +3,7 @@ import bcrypt from "bcrypt";
 import validator from "validator";
 
 import authConfig from "../config/auth.js";
-import { USER_ROLES } from "../utils/constants.js";
+import { USER_ROLES, APP_TIMEZONE } from "../utils/constants.js";
 
 const userSchema = new mongoose.Schema(
     {
@@ -75,9 +75,16 @@ const userSchema = new mongoose.Schema(
             default: null,
         },
 
+        // Tracks when the password was last changed.
+        // Used to invalidate stateless JWT access tokens issued before a password change.
+        passwordChangedAt: {
+            type: Date,
+            default: null,
+        },
+
         timezone: {
             type: String,
-            default: "UTC",
+            default: APP_TIMEZONE,
         },
 
         // Business owner specific fields

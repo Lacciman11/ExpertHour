@@ -1,4 +1,6 @@
 import User from "../models/User.js";
+import sessionService from "./session.service.js";
+import ApiError from "../utils/ApiError.js";
 
 class UserService {
 
@@ -70,7 +72,7 @@ class UserService {
 
         if (!user) {
 
-            throw new Error("User not found");
+            throw new ApiError(404, "User not found");
 
         }
 
@@ -78,13 +80,22 @@ class UserService {
 
         if (!isMatch) {
 
-            throw new Error("Current password is incorrect");
+            throw new ApiError(401, "Current password is incorrect");
 
         }
 
         user.password = newPassword;
 
+        // Invalidate all previously issued stateless access tokens by recording
+        // the password-change time. The auth middleware rejects tokens whose `iat`
+        // predates this timestamp.
+        user.passwordChangedAt = new Date();
+
         await user.save();
+
+        // Revoke all existing refresh-token sessions so that previously issued
+        // refresh tokens can no longer be rotated.
+        await sessionService.revokeAllSessions(id);
 
         return user;
 

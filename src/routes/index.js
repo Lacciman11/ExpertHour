@@ -11,6 +11,7 @@ import reviewRoutes from "./review.routes.js";
 import consultationSessionRoutes from "./consultation-session.routes.js";
 import consultantEarningRoutes from "./consultant-earning.routes.js";
 import payoutRoutes from "./payout.routes.js";
+import applicationRoutes from "./application.routes.js";
 
 const routes = [
     { path: "/api/v1/auth", router: authRoutes },
@@ -25,6 +26,7 @@ const routes = [
     { path: "/api/v1/sessions", router: consultationSessionRoutes },
     { path: "/api/v1/earnings", router: consultantEarningRoutes },
     { path: "/api/v1/payouts", router: payoutRoutes },
+    { path: "/api/v1/applications", router: applicationRoutes },
     { path: "/auth", router: authPageRoutes },
 ];
 

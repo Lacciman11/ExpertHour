@@ -1,15 +1,28 @@
 import mongoose from "mongoose";
 import Booking from "../models/Booking.js";
+import BookingSlotLock from "../models/BookingSlotLock.js";
 import User from "../models/User.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
 import ConsultationSession from "../models/ConsultationSession.js";
+import Payment from "../models/Payment.js";
 import consultantEarningService from "./consultant-earning.service.js";
 import googleCalendarService from "./google-calendar.service.js";
 
-import { BOOKING_STATUS, REFUND_ELIGIBILITY } from "../utils/constants.js";
+import {
+    BOOKING_STATUS,
+    REFUND_ELIGIBILITY,
+    APP_TIMEZONE,
+    APP_TIMEZONE_UTC_OFFSET,
+    CANCELLATION_WINDOW_MS,
+} from "../utils/constants.js";
 import { koboToNaira } from "../utils/currency.js";
+import ApiError from "../utils/ApiError.js";
 
-const CANCELLATION_WINDOW_HOURS = 36;
+/**
+ * Slot granularity in minutes.
+ * Each booking claims one or more slot locks of this duration.
+ */
+const SLOT_GRANULARITY_MINUTES = 30;
 
 class BookingService {
 
@@ -90,30 +103,83 @@ class BookingService {
             );
         }
 
-        // Check for double-booking: overlapping time slots on the same date
+        // --- Atomic slot claiming to prevent double-booking race conditions ---
+        // Calculate all 30-minute slots covered by this booking.
+        // Each slot is claimed atomically using findOneAndUpdate with upsert.
+        // The unique compound index on { consultantProfileId, date, slotStart }
+        // ensures MongoDB itself enforces mutual exclusion.
         const bookingStartMinutes = requestedStart;
         const bookingEndMinutes = requestedEnd;
+        const slotStarts = this._calculateSlotStarts(bookingStartMinutes, bookingEndMinutes);
 
-        const conflictingBookings = await Booking.find({
-            consultantProfileId,
-            date,
-            status: { $in: [BOOKING_STATUS.PENDING, BOOKING_STATUS.CONFIRMED] },
-        });
+        // Claim all slots atomically. If any slot is already claimed by another
+        // client, the unique index violation will cause a duplicate key error.
+        const claimedSlots = [];
+        try {
+            for (const slotStart of slotStarts) {
+                const slotLock = await BookingSlotLock.findOneAndUpdate(
+                    {
+                        consultantProfileId,
+                        date,
+                        slotStart,
+                    },
+                    {
+                        $setOnInsert: {
+                            consultantProfileId,
+                            date,
+                            slotStart,
+                            clientId,
+                            bookingId: null,
+                        },
+                    },
+                    {
+                        upsert: true,
+                        new: true,
+                    }
+                );
 
-        for (const existingBooking of conflictingBookings) {
-            const existingStart = this._timeToMinutes(existingBooking.time);
-            const existingEnd = existingStart + existingBooking.duration;
+                // If the slot was already claimed by a DIFFERENT client, conflict.
+                // Same client re-requesting (idempotent retry) is allowed.
+                if (slotLock.clientId.toString() !== clientId.toString()) {
+                    throw new ApiError(
+                        409,
+                        "This time slot is already booked by another client"
+                    );
+                }
 
-            if (
-                bookingStartMinutes < existingEnd &&
-                bookingEndMinutes > existingStart
-            ) {
-                throw new Error(
+                claimedSlots.push(slotLock);
+            }
+        } catch (error) {
+            // Clean up any slots we claimed before the conflict.
+            // This is best-effort; orphaned slots from same-client retries are harmless.
+            if (error instanceof ApiError && error.statusCode === 409) {
+                await BookingSlotLock.deleteMany({
+                    _id: { $in: claimedSlots.map(s => s._id) },
+                    clientId: clientId,
+                    bookingId: null,
+                });
+                throw error;
+            }
+
+            // MongoDB duplicate key error (E11000) — another concurrent request
+            // claimed this slot between our check and our upsert. Treat as conflict.
+            if (error && (error.code === 11000 || error?.cause?.code === 11000)) {
+                await BookingSlotLock.deleteMany({
+                    _id: { $in: claimedSlots.map(s => s._id) },
+                    clientId: clientId,
+                    bookingId: null,
+                });
+                throw new ApiError(
+                    409,
                     "This time slot is already booked by another client"
                 );
             }
+
+            // Re-throw unexpected errors
+            throw error;
         }
 
+        // All slots claimed successfully. Create the booking.
         const booking = await Booking.create({
             clientId,
             consultantId,
@@ -126,7 +192,53 @@ class BookingService {
             status: BOOKING_STATUS.PENDING,
         });
 
+        // Update slot locks with the booking ID for audit trail.
+        // This is non-critical; failure here doesn't affect the booking.
+        try {
+            await BookingSlotLock.updateMany(
+                { _id: { $in: claimedSlots.map(s => s._id) } },
+                { $set: { bookingId: booking._id } }
+            );
+        } catch (updateError) {
+            console.error("Failed to update slot locks with booking ID:", updateError);
+            // Non-blocking: booking is already created
+        }
+
         return booking;
+    }
+
+    /**
+     * Calculate all 30-minute slot start times covered by a booking.
+     *
+     * A booking from 10:00-11:00 claims slots: 10:00, 10:30.
+     * A booking from 10:15-11:15 claims slots: 10:00, 10:30.
+     * A booking from 10:00-10:30 claims slot: 10:00.
+     *
+     * @param {number} startMinutes - Booking start time in minutes from midnight
+     * @param {number} endMinutes - Booking end time in minutes from midnight
+     * @returns {string[]} Array of slot start times in "HH:MM" format
+     */
+    _calculateSlotStarts(startMinutes, endMinutes) {
+        const slots = [];
+        // Round down to nearest slot boundary
+        const firstSlot = Math.floor(startMinutes / SLOT_GRANULARITY_MINUTES) * SLOT_GRANULARITY_MINUTES;
+
+        for (let slotStart = firstSlot; slotStart < endMinutes; slotStart += SLOT_GRANULARITY_MINUTES) {
+            slots.push(this._minutesToTime(slotStart));
+        }
+
+        return slots;
+    }
+
+    /**
+     * Convert minutes from midnight to "HH:MM" format.
+     * @param {number} minutes - Minutes from midnight
+     * @returns {string} Time in "HH:MM" format
+     */
+    _minutesToTime(minutes) {
+        const hours = Math.floor(minutes / 60);
+        const mins = minutes % 60;
+        return `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
     }
 
     _timeToMinutes(time) {
@@ -134,15 +246,25 @@ class BookingService {
         return hours * 60 + minutes;
     }
 
-    async findById(id) {
+    async findById(id, userId) {
         const booking = await Booking.findById(id)
             .populate("clientId", "firstName lastName email")
             .populate("consultantId", "firstName lastName email")
             .populate("consultantProfileId", "hourlyRate skills");
 
-        if (booking) {
-            booking.amount = koboToNaira(booking.amount);
+        if (!booking) {
+            throw new ApiError(404, "Booking not found");
         }
+
+        // Authorization: only the booking client or consultant may view the booking
+        const isClient = booking.clientId?._id?.toString() === userId.toString();
+        const isConsultant = booking.consultantId?._id?.toString() === userId.toString();
+
+        if (!isClient && !isConsultant) {
+            throw new ApiError(403, "Not authorized to view this booking");
+        }
+
+        booking.amount = koboToNaira(booking.amount);
 
         return booking;
     }
@@ -252,6 +374,94 @@ class BookingService {
     }
 
     /**
+     * Confirm a booking. Enforces consultant ownership and valid state transition.
+     *
+     * Allowed transition: PENDING -> CONFIRMED
+     *
+     * @param {string} id - Booking ID
+     * @param {string} consultantId - Authenticated consultant's user ID
+     * @returns {Object} Updated booking
+     */
+    async confirmBooking(id, consultantId) {
+        const booking = await Booking.findById(id);
+
+        if (!booking) {
+            throw new ApiError(404, "Booking not found");
+        }
+
+        // Ownership check: consultant must own the booking
+        if (booking.consultantId.toString() !== consultantId.toString()) {
+            throw new ApiError(403, "Not authorized to confirm this booking");
+        }
+
+        // State transition check: only PENDING bookings can be confirmed
+        if (booking.status === BOOKING_STATUS.CANCELLED) {
+            throw new ApiError(400, "Cannot confirm a cancelled booking");
+        }
+
+        if (booking.status === BOOKING_STATUS.CONFIRMED) {
+            throw new ApiError(400, "Booking is already confirmed");
+        }
+
+        if (booking.status === BOOKING_STATUS.COMPLETED) {
+            throw new ApiError(400, "Cannot confirm a completed booking");
+        }
+
+        if (booking.status !== BOOKING_STATUS.PENDING) {
+            throw new ApiError(400, "Booking is not pending");
+        }
+
+        booking.status = BOOKING_STATUS.CONFIRMED;
+        await booking.save();
+
+        return booking;
+    }
+
+    /**
+     * Complete a booking. Enforces consultant ownership and valid state transition.
+     *
+     * Allowed transition: CONFIRMED -> COMPLETED
+     *
+     * @param {string} id - Booking ID
+     * @param {string} consultantId - Authenticated consultant's user ID
+     * @returns {Object} Updated booking
+     */
+    async completeBooking(id, consultantId) {
+        const booking = await Booking.findById(id);
+
+        if (!booking) {
+            throw new ApiError(404, "Booking not found");
+        }
+
+        // Ownership check: consultant must own the booking
+        if (booking.consultantId.toString() !== consultantId.toString()) {
+            throw new ApiError(403, "Not authorized to complete this booking");
+        }
+
+        // State transition check: only CONFIRMED bookings can be completed
+        if (booking.status === BOOKING_STATUS.CANCELLED) {
+            throw new ApiError(400, "Cannot complete a cancelled booking");
+        }
+
+        if (booking.status === BOOKING_STATUS.PENDING) {
+            throw new ApiError(400, "Booking must be confirmed before completion");
+        }
+
+        if (booking.status === BOOKING_STATUS.COMPLETED) {
+            throw new ApiError(400, "Booking is already completed");
+        }
+
+        if (booking.status !== BOOKING_STATUS.CONFIRMED) {
+            throw new ApiError(400, "Booking is not confirmed");
+        }
+
+        booking.status = BOOKING_STATUS.COMPLETED;
+        await booking.save();
+
+        return booking;
+    }
+
+    /**
      * Cancel a booking with reason and refund eligibility calculation.
      *
      * @param {string} id - Booking ID
@@ -305,6 +515,15 @@ class BookingService {
         booking.refundEligibility = refundEligibility;
         await booking.save();
 
+        // Release slot locks for this booking so the time slot can be re-booked.
+        // This is non-critical; failure here doesn't affect the cancellation.
+        try {
+            await BookingSlotLock.deleteMany({ bookingId: booking._id });
+        } catch (slotError) {
+            console.error("Failed to release slot locks on cancellation:", slotError);
+            // Non-blocking: cancellation should still succeed
+        }
+
         // Increment consultant cancellation count if consultant cancelled
         if (cancelActor === "consultant") {
             await this._incrementConsultantCancellationCount(booking.consultantId);
@@ -352,15 +571,34 @@ class BookingService {
      * @returns {string} REFUND_ELIGIBILITY.FULL or REFUND_ELIGIBILITY.NONE
      */
     _calculateRefundEligibility(booking) {
-        const now = new Date();
+        // Current time is obtained through a dedicated helper so it can be
+        // controlled deterministically in tests without fake timers (which
+        // interfere with the in-memory MongoDB server).
+        const now = this._getCurrentTime();
         const sessionStartTime = this._getSessionStartTime(booking.date, booking.time);
-        const hoursUntilSession = (sessionStartTime.getTime() - now.getTime()) / (1000 * 60 * 60);
 
-        if (hoursUntilSession >= CANCELLATION_WINDOW_HOURS) {
+        // Integer timestamp arithmetic. Avoids floating-point hour division
+        // (difference / (1000 * 60 * 60)), which is imprecise at the 36h
+        // boundary. Rule: ≥36h remaining = full refund; exactly 36h qualifies.
+        const remainingMs = sessionStartTime.getTime() - now.getTime();
+
+        if (remainingMs >= CANCELLATION_WINDOW_MS) {
             return REFUND_ELIGIBILITY.FULL;
         }
 
         return REFUND_ELIGIBILITY.NONE;
+    }
+
+    /**
+     * Return the current time as a Date.
+     *
+     * Isolated as a helper solely so cancellation-boundary tests can control
+     * "now" deterministically via a spy, keeping the 36-hour boundary exact
+     * without fake timers (which break the in-memory MongoDB server).
+     * @returns {Date} Current time
+     */
+    _getCurrentTime() {
+        return new Date();
     }
 
     /**
@@ -371,8 +609,10 @@ class BookingService {
      */
     _getSessionStartTime(date, time) {
         const [hours, minutes] = time.split(":").map(Number);
-        // Parse as local time (Nigeria is UTC+1)
-        const sessionDate = new Date(`${date}T${time}:00+01:00`);
+        // Parse as wall-clock time in the application business timezone
+        // (Africa/Lagos). The offset is a fixed constant because Nigeria does
+        // not observe daylight saving time.
+        const sessionDate = new Date(`${date}T${time}:00${APP_TIMEZONE_UTC_OFFSET}`);
         return sessionDate;
     }
 
@@ -393,11 +633,118 @@ class BookingService {
         }
     }
 
-    async generateMeetingLink(id) {
+    /**
+     * Generate (or return an existing) meeting link for a booking.
+     *
+     * Authorization (AUTH-05, must remain intact):
+     *   Only the booking's client or consultant may receive a meeting link.
+     *   Admins, other users, and unauthenticated callers are rejected.
+     *
+     * State machine:
+     *   - cancelled           → reject (400)
+     *   - completed           → idempotent: return existing link if present,
+     *                           otherwise reject (400) — a completed session
+     *                           does not need a freshly generated link.
+     *   - pending             → reject (400). Successful payment reconciliation
+     *                           auto-transitions pending → confirmed, so a
+     *                           legitimate ready-for-consultation booking is
+     *                           always confirmed at this point.
+     *   - confirmed           → require successful Payment (status === "success")
+     *                           before generating / returning the link.
+     *
+     * Idempotency:
+     *   If the booking already has a meeting link and all other guards pass,
+     *   the existing link is returned unchanged. We do NOT regenerate.
+     *
+     * Local validation only:
+     *   This endpoint MUST NOT call Paystack or trigger payment reconciliation.
+     *   It only validates existing local Booking + Payment state.
+     */
+    async generateMeetingLink(id, userId) {
         const booking = await Booking.findById(id);
 
         if (!booking) {
-            throw new Error("Booking not found");
+            throw new ApiError(404, "Booking not found");
+        }
+
+        // AUTH-05 — ownership check. No admin bypass.
+        const isClient = booking.clientId.toString() === userId.toString();
+        const isConsultant = booking.consultantId.toString() === userId.toString();
+
+        if (!isClient && !isConsultant) {
+            throw new ApiError(
+                403,
+                "Not authorized to generate meeting link for this booking"
+            );
+        }
+
+        // Booking state guard. Cancelled bookings cannot receive a link.
+        if (booking.status === BOOKING_STATUS.CANCELLED) {
+            throw new ApiError(
+                400,
+                "Cannot generate meeting link for a cancelled booking"
+            );
+        }
+
+        // Pending bookings are not ready for consultation. Successful payment
+        // reconciliation always transitions pending → confirmed, so any
+        // pending booking reaching this endpoint has not been paid.
+        if (booking.status === BOOKING_STATUS.PENDING) {
+            throw new ApiError(
+                400,
+                "Meeting link is only available after the booking is confirmed (payment completed)"
+            );
+        }
+
+        // Completed bookings: idempotent — return existing link if present,
+        // otherwise reject (a completed session does not need a new link).
+        if (booking.status === BOOKING_STATUS.COMPLETED) {
+            if (booking.meetingLink && booking.meetingLink.length > 0) {
+                return booking;
+            }
+            throw new ApiError(
+                400,
+                "Cannot generate a new meeting link for a completed booking"
+            );
+        }
+
+        // From here on, booking.status === "confirmed".
+        // Confirmed bookings still require a successful payment to receive
+        // a meeting link — covers the edge case of a manually-confirmed
+        // booking that was never paid (e.g., admin bypass or data drift).
+
+        if (!booking.paymentReference || booking.paymentReference.length === 0) {
+            throw new ApiError(
+                400,
+                "Meeting link is only available after successful payment"
+            );
+        }
+
+        // Load the associated Payment record.
+        const payment = await Payment.findOne({
+            reference: booking.paymentReference,
+        });
+
+        if (!payment) {
+            throw new ApiError(
+                400,
+                "Meeting link is only available after successful payment"
+            );
+        }
+
+        // Canonical success status from Payment model enum:
+        //   ["pending", "processing", "success", "failed", "abandoned"]
+        if (payment.status !== "success") {
+            throw new ApiError(
+                400,
+                "Meeting link is only available after successful payment"
+            );
+        }
+
+        // Idempotency: if a link was already generated for this valid
+        // (confirmed + paid) booking, return it unchanged.
+        if (booking.meetingLink && booking.meetingLink.length > 0) {
+            return booking;
         }
 
         const meetingLink = `https://experthour.onrender.com/meeting/${booking._id}`;
@@ -501,46 +848,100 @@ class BookingService {
         };
     }
 
+    /**
+     * Accept a booking (pending -> confirmed).
+     *
+     * FINDING-B03: the state transition uses an atomic conditional update so
+     * that two concurrent accept/decline operations against the same PENDING
+     * booking result in exactly one winner. The filter includes the expected
+     * current status, ownership, and identity, so the database — not
+     * application logic — enforces mutual exclusion.
+     *
+     * @param {string} id - Booking ID
+     * @param {string} consultantId - Authenticated consultant's user ID
+     * @returns {Object} Updated booking (confirmed)
+     */
     async acceptBooking(id, consultantId) {
-        const booking = await Booking.findById(id);
+        const booking = await Booking.findOneAndUpdate(
+            {
+                _id: id,
+                consultantId: consultantId,
+                status: BOOKING_STATUS.PENDING,
+            },
+            {
+                $set: { status: BOOKING_STATUS.CONFIRMED },
+            },
+            {
+                new: true,
+            }
+        );
 
-        if (!booking) {
-            throw new Error("Booking not found");
+        if (booking) {
+            return booking;
         }
 
-        if (booking.consultantId.toString() !== consultantId.toString()) {
-            throw new Error("Not authorized to accept this booking");
+        // The atomic transition matched nothing. Classify the reason with a
+        // follow-up read so we can return a precise status code. This read is
+        // purely diagnostic and cannot undo the atomic transition.
+        const existing = await Booking.findById(id);
+
+        if (!existing) {
+            throw new ApiError(404, "Booking not found");
         }
 
-        if (booking.status !== BOOKING_STATUS.PENDING) {
-            throw new Error("Booking is not pending");
+        if (existing.consultantId.toString() !== consultantId.toString()) {
+            throw new ApiError(403, "Not authorized to accept this booking");
         }
 
-        booking.status = BOOKING_STATUS.CONFIRMED;
-        await booking.save();
-
-        return booking;
+        // Booking exists and is owned, but is no longer pending.
+        throw new ApiError(409, "Booking is no longer pending");
     }
 
+    /**
+     * Decline a booking (pending -> cancelled).
+     *
+     * FINDING-B03: atomic conditional update (see acceptBooking). The earning
+     * cancellation side effect runs ONLY after a confirmed successful state
+     * transition, so a losing concurrent request never triggers it.
+     *
+     * @param {string} id - Booking ID
+     * @param {string} consultantId - Authenticated consultant's user ID
+     * @returns {Object} Updated booking (cancelled)
+     */
     async declineBooking(id, consultantId) {
-        const booking = await Booking.findById(id);
+        const booking = await Booking.findOneAndUpdate(
+            {
+                _id: id,
+                consultantId: consultantId,
+                status: BOOKING_STATUS.PENDING,
+            },
+            {
+                $set: { status: BOOKING_STATUS.CANCELLED },
+            },
+            {
+                new: true,
+            }
+        );
 
         if (!booking) {
-            throw new Error("Booking not found");
+            // The atomic transition matched nothing. Classify the reason.
+            const existing = await Booking.findById(id);
+
+            if (!existing) {
+                throw new ApiError(404, "Booking not found");
+            }
+
+            if (existing.consultantId.toString() !== consultantId.toString()) {
+                throw new ApiError(403, "Not authorized to decline this booking");
+            }
+
+            // Booking exists and is owned, but is no longer pending.
+            throw new ApiError(409, "Booking is no longer pending");
         }
 
-        if (booking.consultantId.toString() !== consultantId.toString()) {
-            throw new Error("Not authorized to decline this booking");
-        }
-
-        if (booking.status !== BOOKING_STATUS.PENDING) {
-            throw new Error("Booking is not pending");
-        }
-
-        booking.status = BOOKING_STATUS.CANCELLED;
-        await booking.save();
-
-        // If an earning exists for this booking, mark it as CANCELLED
+        // Side effect ONLY after a confirmed atomic transition. This guards
+        // against duplicate earning cancellations when concurrent requests race.
+        // If an earning exists for this booking, mark it as CANCELLED.
         await consultantEarningService.cancelEarningForBooking(booking._id);
 
         return booking;

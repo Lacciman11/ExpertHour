@@ -27,6 +27,26 @@ class CloudinaryService {
 
     }
 
+    async uploadCV(file) {
+
+        const result = await cloudinary.uploader.upload(
+            `data:${file.mimetype};base64,${file.buffer.toString("base64")}`,
+            {
+                folder: "expert-hour/cvs",
+                resource_type: "auto",
+            }
+        );
+
+        return {
+
+            url: result.secure_url,
+
+            publicId: result.public_id,
+
+        };
+
+    }
+
     async deleteAvatar(publicId) {
 
         if (!publicId) {
@@ -36,6 +56,18 @@ class CloudinaryService {
         }
 
         await cloudinary.uploader.destroy(publicId);
+
+    }
+
+    async deleteCV(publicId) {
+
+        if (!publicId) {
+
+            return;
+
+        }
+
+        await cloudinary.uploader.destroy(publicId, { resource_type: "auto" });
 
     }
 

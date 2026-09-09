@@ -56,22 +56,8 @@ export const getBookingById = asyncHandler(async (req, res) => {
 
     const { id } = req.params;
 
-    const booking = await bookingService.findById(id);
-
-    if (!booking) {
-        return res.status(404).json({
-            success: false,
-            message: "Booking not found",
-        });
-    }
-
-    if (booking.clientId._id.toString() !== req.user._id.toString() &&
-        booking.consultantId._id.toString() !== req.user._id.toString()) {
-        return res.status(403).json({
-            success: false,
-            message: "Not authorized to view this booking",
-        });
-    }
+    // Service layer enforces booking ownership (client or consultant)
+    const booking = await bookingService.findById(id, req.user._id);
 
     return res.status(200).json(
         new ApiResponse(
@@ -112,8 +98,10 @@ export const cancelBooking = asyncHandler(async (req, res) => {
 export const confirmBooking = asyncHandler(async (req, res) => {
 
     const { id } = req.params;
+    const consultantId = req.user._id;
 
-    const booking = await bookingService.updateStatus(id, "confirmed");
+    // Service layer enforces ownership and valid state transitions
+    const booking = await bookingService.confirmBooking(id, consultantId);
 
     return res.status(200).json(
         new ApiResponse(
@@ -128,8 +116,10 @@ export const confirmBooking = asyncHandler(async (req, res) => {
 export const completeBooking = asyncHandler(async (req, res) => {
 
     const { id } = req.params;
+    const consultantId = req.user._id;
 
-    const booking = await bookingService.updateStatus(id, "completed");
+    // Service layer enforces ownership and valid state transitions
+    const booking = await bookingService.completeBooking(id, consultantId);
 
     return res.status(200).json(
         new ApiResponse(

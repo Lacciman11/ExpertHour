@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import authConfig from "../config/auth.js";
 import ApiError from "../utils/ApiError.js";
 
@@ -15,8 +16,15 @@ class TokenService {
     }
 
     generateRefreshToken(payload) {
+        // Add a unique jti (JWT ID) to ensure each token is unique
+        // This prevents token collisions when the same user refreshes multiple times
+        const tokenPayload = {
+            ...payload,
+            jti: crypto.randomUUID(),
+        };
+
         return jwt.sign(
-            payload,
+            tokenPayload,
             authConfig.refreshToken.secret,
             {
                 expiresIn: authConfig.refreshToken.expiresIn,

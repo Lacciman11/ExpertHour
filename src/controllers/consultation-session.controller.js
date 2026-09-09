@@ -58,19 +58,32 @@ export const getSessionByBookingId = asyncHandler(async (req, res) => {
 
 });
 
-export const updateAttendance = asyncHandler(async (req, res) => {
+/**
+ * Participant attendance signaling.
+ *
+ * Trust-boundary contract (see consultation-session.service.js):
+ *   - The body must contain `action` ∈ {"join", "leave"} only.
+ *   - Terminal statuses ("completed", "no_show_client", "no_show_consultant")
+ *     and any server-derived field are rejected by the service.
+ *   - This endpoint MUST NOT trigger any financial outcome.
+ */
+export const recordAttendanceSignal = asyncHandler(async (req, res) => {
 
     const { bookingId } = req.params;
 
-    const { attendanceStatus } = req.body;
+    const { action } = req.body;
 
-    const session = await ConsultationSessionService.updateAttendance(bookingId, req.user._id, attendanceStatus);
+    const session = await ConsultationSessionService.recordAttendanceSignal(
+        bookingId,
+        req.user._id,
+        action
+    );
 
     return res.status(200).json(
         new ApiResponse(
             200,
             session,
-            "Attendance updated successfully"
+            "Attendance signal recorded"
         )
     );
 

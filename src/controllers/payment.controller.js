@@ -5,6 +5,7 @@ import ApiResponse from "../utils/ApiResponse.js";
 import ApiError from "../utils/ApiError.js";
 
 import paymentService from "../services/payment.service.js";
+import { selectPaystackRefundId } from "../services/refund.service.js";
 import bookingService from "../services/booking.service.js";
 import refundService from "../services/refund.service.js";
 import Payment from "../models/Payment.js";
@@ -34,7 +35,8 @@ export const verifyPayment = asyncHandler(async (req, res) => {
 
     const { reference } = req.params;
 
-    const result = await paymentService.verifyPayment(reference, correlationId);
+    // Service layer enforces payment ownership (booking client or consultant)
+    const result = await paymentService.verifyPayment(reference, req.user._id, correlationId);
 
     if (result.success && result.booking) {
 
@@ -65,7 +67,8 @@ export const generateMeetingLink = asyncHandler(async (req, res) => {
 
     const { bookingId } = req.body;
 
-    const booking = await bookingService.generateMeetingLink(bookingId);
+    // Service layer enforces booking ownership (client or consultant)
+    const booking = await bookingService.generateMeetingLink(bookingId, req.user._id);
 
     return res.status(200).json(
         new ApiResponse(
@@ -103,7 +106,9 @@ export const retryPayment = asyncHandler(async (req, res) => {
 
     const { bookingId } = req.params;
 
-    const result = await paymentService.retryPayment(bookingId, req.user._id);
+    const correlationId = req.correlationId || req.id;
+
+    const result = await paymentService.retryPayment(bookingId, req.user._id, correlationId);
 
     return res.status(200).json(
         new ApiResponse(
@@ -256,31 +261,92 @@ export const checkRefundStatus = asyncHandler(async (req, res) => {
 
         // Attempt to fetch latest Paystack refund status for visibility
         let paystackStatus = null;
+        let paystackError = null;
 
         try {
 
             const payment = await Payment.findById(paymentId);
 
-            if (payment && payment.refundReference) {
+            // Use the Paystack-native refund id (from refundResponse), not the
+            // local REF-* idempotency key. Calling Paystack with the local
+            // reference would never resolve to the actual refund.
+            const paystackRefundId = payment ? selectPaystackRefundId(payment) : null;
+
+            if (payment && paystackRefundId !== null && paystackRefundId !== undefined) {
 
                 const response = await paymentService.paystackClient.request(
 
                     "GET",
 
-                    `/refund/${payment.refundReference}`
+                    `/refund/${paystackRefundId}`
 
                 );
 
                 paystackStatus = response.data;
 
+            } else if (payment && payment.refundReference) {
+
+                // Refund record exists but Paystack-native id is missing
+                // (legacy / pre-fix record). Do not call Paystack with the
+                // local REF-* value; surface a clear error instead.
+                paystackError =
+                    "Paystack-native refund id unavailable; cannot query Paystack with the local refund reference.";
+
             }
 
-        } catch (paystackError) {
+        } catch (err) {
 
             // Paystack check is best-effort; local history remains authoritative
-            paystackStatus = { error: paystackError.message };
+            paystackError = err.message;
 
         }
+
+        return res.status(200).json(
+            new ApiResponse(
+                200,
+                { history, paystackStatus, paystackError },
+                "Refund status fetched successfully"
+            )
+        );
+
+    } catch (error) {
+
+        if (error instanceof ApiError) {
+
+            return res.status(error.statusCode).json({
+
+                success: false,
+
+                message: error.message,
+
+            });
+
+        }
+
+        throw error;
+
+    }
+
+});
+
+/**
+ * Reconcile a Paystack refund when the external refund succeeded but the
+ * local MongoDB transaction failed to commit.
+ *
+ * This endpoint triggers the same reconciliation logic that the background
+ * RefundReconciliationService worker uses. It is idempotent — repeated
+ * reconciliation of the same refund will not double-adjust earnings or
+ * duplicate refund history.
+ *
+ * Admin-only.
+ */
+export const reconcileRefund = asyncHandler(async (req, res) => {
+
+    const { paymentId } = req.params;
+
+    try {
+
+        const result = await refundService.reconcileRefundWithPaystack(paymentId);
 
         return res.status(200).json(
 
@@ -288,9 +354,13 @@ export const checkRefundStatus = asyncHandler(async (req, res) => {
 
                 200,
 
-                { history, paystackStatus },
+                result,
 
-                "Refund status fetched successfully"
+                result.reconciled
+
+                    ? "Refund reconciled successfully"
+
+                    : "Refund reconciliation completed",
 
             )
 

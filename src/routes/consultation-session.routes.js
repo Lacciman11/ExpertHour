@@ -3,7 +3,7 @@ import { Router } from "express";
 import {
     createOrUpdateSession,
     getSessionByBookingId,
-    updateAttendance,
+    recordAttendanceSignal,
     addRecordingUrl,
 } from "../controllers/consultation-session.controller.js";
 
@@ -38,10 +38,10 @@ router.get(
     getSessionByBookingId
 );
 
-// Update attendance status
+// Participant attendance signal (join / leave only — terminal statuses are rejected)
 router.patch(
     "/booking/:bookingId/attendance",
-    updateAttendance
+    recordAttendanceSignal
 );
 
 // Add recording URL (consultant only)

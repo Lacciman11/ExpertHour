@@ -1,99 +1,162 @@
+import mongoose from "mongoose";
+
 import app from "./app.js";
-import env, { validateEnv } from "./config/env.js";
-import connectDB from "./config/db.js";
-import Category from "./models/Category.js";
-import paymentReconciliationService from "./services/payment-reconciliation.service.js";
+
+import consultationSessionOutcomeService from "./services/consultation-session-outcome.service.js";
+import consultationSessionFinancialWorker from "./services/consultation-session-financial.worker.js";
 import earningEligibilityService from "./services/earning-eligibility.service.js";
-import payoutProcessingService from "./services/payout-processing.service.js";
 
-const DEFAULT_CATEGORIES = [
-    "Strategy",
-    "Sales",
-    "Marketing",
-    "Finance",
-    "HR",
-    "Operations",
-    "Digital",
-    "Leadership",
-    "Customer Experience",
-    "Startup",
-];
+import env from "./config/env.js";
+import paymentLogger from "./utils/logger.js";
 
-const seedCategories = async () => {
-    const count = await Category.countDocuments();
-    if (count > 0) {
-        console.log(`Categories already seeded (${count} categories found)`);
-        return;
-    }
+const PORT = env.port;
 
-    console.log("Seeding default categories...");
-    for (const name of DEFAULT_CATEGORIES) {
-        await Category.create({
-            name,
-            description: `${name} consulting services`,
-        });
-    }
-    console.log(`Seeded ${DEFAULT_CATEGORIES.length} default categories`);
-};
+// ---------------------------------------------------------------------------
+// Database Connection
+// ---------------------------------------------------------------------------
 
-const startServer = async () => {
+async function connectDatabase() {
+
     try {
-        validateEnv();
 
-        await connectDB();
+        await mongoose.connect(env.mongoUri);
 
-        await seedCategories();
+        paymentLogger.info("database_connected", {
 
-        const server = app.listen(env.port, () => {
-            console.log(
-                ` Server running on http://localhost:${env.port}`
-            );
+            event: "database_connected",
 
-            // Start background workers only after the server is listening
-            // and the database connection is established.
-            paymentReconciliationService.start();
-            earningEligibilityService.start();
-            payoutProcessingService.start();
+            uri: env.mongoUri.replace(/\/\/.*@/, "//***@"),
+
         });
 
-        // Graceful shutdown handlers
-        const gracefulShutdown = (signal) => {
+    } catch (error) {
 
-            console.log(`\n[Server] Received ${signal}, shutting down gracefully...`);
+        paymentLogger.error("database_connection_failed", {
 
-            paymentReconciliationService.stop();
-            earningEligibilityService.stop();
-            payoutProcessingService.stop();
+            event: "database_connection_failed",
 
-            server.close(() => {
+            error: error.message,
 
-                console.log("[Server] HTTP server closed");
+        });
 
-                process.exit(0);
+        process.exit(1);
+
+    }
+
+}
+
+// ---------------------------------------------------------------------------
+// Start Workers
+// ---------------------------------------------------------------------------
+
+function startWorkers() {
+
+    // Outcome worker: attendance → outcome
+    consultationSessionOutcomeService.start();
+
+    // Financial worker: outcome → financial consequence
+    consultationSessionFinancialWorker.start();
+
+    // Earning eligibility worker: PENDING → ELIGIBLE after 24h
+    earningEligibilityService.start();
+
+    paymentLogger.info("workers_started", {
+
+        event: "workers_started",
+
+    });
+
+}
+
+// ---------------------------------------------------------------------------
+// Graceful Shutdown
+// ---------------------------------------------------------------------------
+
+async function gracefulShutdown(signal) {
+
+    paymentLogger.info("shutdown_signal", {
+
+        event: "shutdown_signal",
+
+        signal,
+
+    });
+
+    // Stop workers first
+    consultationSessionOutcomeService.stop();
+    consultationSessionFinancialWorker.stop();
+    earningEligibilityService.stop();
+
+    // Close HTTP server
+    if (server) {
+
+        server.close(() => {
+
+            paymentLogger.info("http_server_closed", {
+
+                event: "http_server_closed",
 
             });
 
-            // Force exit after timeout if server doesn't close in time
-            setTimeout(() => {
+        });
 
-                console.error("[Server] Forced shutdown after timeout");
-
-                process.exit(1);
-
-            }, 10000);
-
-        };
-
-        process.on("SIGINT", () => gracefulShutdown("SIGINT"));
-
-        process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
-
-    } catch (error) {
-        console.error("Application failed to start");
-        console.error(error.message);
-
-        process.exit(1);
     }
-};
 
-startServer();
+    // Close database connection
+    await mongoose.disconnect();
+
+    paymentLogger.info("shutdown_complete", {
+
+        event: "shutdown_complete",
+
+    });
+
+    process.exit(0);
+
+}
+
+// ---------------------------------------------------------------------------
+// Bootstrap
+// ---------------------------------------------------------------------------
+
+let server;
+
+async function bootstrap() {
+
+    await connectDatabase();
+
+    server = app.listen(PORT, () => {
+
+        paymentLogger.info("server_started", {
+
+            event: "server_started",
+
+            port: PORT,
+
+            env: env.nodeEnv,
+
+        });
+
+    });
+
+    startWorkers();
+
+    // Register shutdown handlers
+    process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+    process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+
+}
+
+bootstrap().catch((error) => {
+
+    paymentLogger.error("bootstrap_failed", {
+
+        event: "bootstrap_failed",
+
+        error: error.message,
+
+    });
+
+    process.exit(1);
+
+});

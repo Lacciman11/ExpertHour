@@ -3,6 +3,7 @@ import User from "../models/User.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
 import Booking from "../models/Booking.js";
 import env from "../config/env.js";
+import { APP_TIMEZONE } from "../utils/constants.js";
 
 class GoogleCalendarService {
 
@@ -105,7 +106,7 @@ class GoogleCalendarService {
         return accessToken;
     }
 
-    async createEvent(consultantId, bookingId, date, time, duration, timezone = "UTC") {
+    async createEvent(consultantId, bookingId, date, time, duration, timezone = APP_TIMEZONE) {
         const profile = await ConsultantProfile.findOne({ userId: consultantId });
 
         if (!profile) {
@@ -157,7 +158,7 @@ class GoogleCalendarService {
         return meetingLink;
     }
 
-    async updateEvent(consultantId, bookingId, date, time, duration, timezone = "UTC") {
+    async updateEvent(consultantId, bookingId, date, time, duration, timezone = APP_TIMEZONE) {
         const profile = await ConsultantProfile.findOne({ userId: consultantId });
 
         if (!profile) {
@@ -225,7 +226,7 @@ class GoogleCalendarService {
                 User.findById(consultantId).select("timezone"),
             ]);
 
-            const timezone = client?.timezone || consultant?.timezone || "UTC";
+            const timezone = client?.timezone || consultant?.timezone || APP_TIMEZONE;
 
             return await this.createEvent(consultantId, bookingId, date, time, duration, timezone);
         } catch (error) {
@@ -243,7 +244,7 @@ class GoogleCalendarService {
                 User.findById(consultantId).select("timezone"),
             ]);
 
-            const timezone = client?.timezone || consultant?.timezone || "UTC";
+            const timezone = client?.timezone || consultant?.timezone || APP_TIMEZONE;
 
             return await this.updateEvent(consultantId, bookingId, date, time, duration, timezone);
         } catch (error) {
@@ -299,14 +300,14 @@ class GoogleCalendarService {
         }
     }
 
-    _formatGoogleCalendarDateTime(dateStr, timeStr, timezone = "UTC") {
+    _formatGoogleCalendarDateTime(dateStr, timeStr, timezone = APP_TIMEZONE) {
         const [hours, minutes] = timeStr.split(":").map(Number);
         const date = new Date(dateStr + "T00:00:00Z");
         date.setUTCHours(hours, minutes, 0, 0);
         return date.toISOString();
     }
 
-    _calculateEndTime(dateStr, timeStr, duration, timezone = "UTC") {
+    _calculateEndTime(dateStr, timeStr, duration, timezone = APP_TIMEZONE) {
         const [hours, minutes] = timeStr.split(":").map(Number);
         const date = new Date(dateStr + "T00:00:00Z");
         date.setUTCHours(hours, minutes, 0, 0);
