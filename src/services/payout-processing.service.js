@@ -17,6 +17,7 @@ import mongoose from "mongoose";
 
 import payoutService from "./payout.service.js";
 import { EARNING_STATUS, PAYOUT_STATUS } from "../utils/constants.js";
+import env from "../config/env.js";
 
 // ---------------------------------------------------------------------------
 // Export class for testing
@@ -28,13 +29,13 @@ export { PayoutProcessingService };
 // Configuration
 // ---------------------------------------------------------------------------
 
-const DEFAULT_CONFIG = {
-    intervalMs: 60 * 60 * 1000, // 1 hour
-    delayMs: 5 * 60 * 1000, // 5 minutes initial delay
-    processingTimeoutMs: 10 * 60 * 1000, // 10 minutes max processing time
-    maxAttempts: 3,
-    batchSize: 20,
-};
+const {
+    intervalMs,
+    delayMs,
+    processingTimeoutMs,
+    maxAttempts,
+    batchSize,
+} = env.payoutProcessing;
 
 // ---------------------------------------------------------------------------
 // Service Class
@@ -52,7 +53,14 @@ class PayoutProcessingService {
      * @param {object} config - Configuration overrides
      */
     constructor(config = {}) {
-        this.#config = { ...DEFAULT_CONFIG, ...config };
+        this.#config = {
+            intervalMs,
+            delayMs,
+            processingTimeoutMs,
+            maxAttempts,
+            batchSize,
+            ...config,
+        };
     }
 
     /**

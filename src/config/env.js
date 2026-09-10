@@ -77,6 +77,24 @@ const env = {
     },
 
     // ---------------------------------------------------------------------------
+    // Payout Processing
+    // ---------------------------------------------------------------------------
+
+    payoutProcessing: {
+
+        intervalMs: parseInt(process.env.PAYOUT_PROCESSING_INTERVAL_MS || "3600000", 10),
+
+        delayMs: parseInt(process.env.PAYOUT_PROCESSING_DELAY_MS || "300000", 10),
+
+        processingTimeoutMs: parseInt(process.env.PAYOUT_PROCESSING_TIMEOUT_MS || "600000", 10),
+
+        maxAttempts: parseInt(process.env.PAYOUT_PROCESSING_MAX_ATTEMPTS || "3", 10),
+
+        batchSize: parseInt(process.env.PAYOUT_PROCESSING_BATCH_SIZE || "20", 10),
+
+    },
+
+    // ---------------------------------------------------------------------------
     // Paystack
     // ---------------------------------------------------------------------------
 

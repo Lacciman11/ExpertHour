@@ -5,6 +5,9 @@ import app from "./app.js";
 import consultationSessionOutcomeService from "./services/consultation-session-outcome.service.js";
 import consultationSessionFinancialWorker from "./services/consultation-session-financial.worker.js";
 import earningEligibilityService from "./services/earning-eligibility.service.js";
+import paymentReconciliationService from "./services/payment-reconciliation.service.js";
+import refundReconciliationService from "./services/refund-reconciliation.service.js";
+import payoutProcessingService from "./services/payout-processing.service.js";
 
 import env from "./config/env.js";
 import paymentLogger from "./utils/logger.js";
@@ -60,6 +63,15 @@ function startWorkers() {
     // Earning eligibility worker: PENDING → ELIGIBLE after 24h
     earningEligibilityService.start();
 
+    // Payment reconciliation worker: recovers pending/processing payments
+    paymentReconciliationService.start();
+
+    // Refund reconciliation worker: reconciles failed local refund transactions
+    refundReconciliationService.start();
+
+    // Payout processing worker: creates payout cycles for eligible earnings
+    payoutProcessingService.start();
+
     paymentLogger.info("workers_started", {
 
         event: "workers_started",
@@ -86,6 +98,9 @@ async function gracefulShutdown(signal) {
     consultationSessionOutcomeService.stop();
     consultationSessionFinancialWorker.stop();
     earningEligibilityService.stop();
+    paymentReconciliationService.stop();
+    refundReconciliationService.stop();
+    payoutProcessingService.stop();
 
     // Close HTTP server
     if (server) {
