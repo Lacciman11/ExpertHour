@@ -53,34 +53,16 @@ export const applicationValidator = [
         .notEmpty()
         .withMessage("Primary industry is required"),
 
-    body("primaryIndustryOther")
-        .optional()
-        .trim()
-        .isLength({ max: 100 })
-        .withMessage("Primary industry other cannot exceed 100 characters"),
-
     body("primaryExpertise")
         .trim()
         .notEmpty()
         .withMessage("Primary expertise is required"),
-
-    body("primaryExpertiseOther")
-        .optional()
-        .trim()
-        .isLength({ max: 100 })
-        .withMessage("Primary expertise other cannot exceed 100 characters"),
 
     body("otherExpertise")
         .optional()
         .trim()
         .isLength({ max: 100 })
         .withMessage("Other expertise cannot exceed 100 characters"),
-
-    body("otherExpertiseOther")
-        .optional()
-        .trim()
-        .isLength({ max: 100 })
-        .withMessage("Other expertise other cannot exceed 100 characters"),
 
     body("notableAchievement")
         .optional()

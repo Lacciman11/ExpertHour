@@ -63,36 +63,15 @@ const applicationSchema = new mongoose.Schema(
             trim: true,
         },
 
-        primaryIndustryOther: {
-            type: String,
-            trim: true,
-            maxlength: [100, "Primary industry other cannot exceed 100 characters"],
-            default: "",
-        },
-
         primaryExpertise: {
             type: String,
             required: [true, "Primary expertise is required"],
             trim: true,
         },
 
-        primaryExpertiseOther: {
-            type: String,
-            trim: true,
-            maxlength: [100, "Primary expertise other cannot exceed 100 characters"],
-            default: "",
-        },
-
         otherExpertise: {
             type: String,
             trim: true,
-            default: "",
-        },
-
-        otherExpertiseOther: {
-            type: String,
-            trim: true,
-            maxlength: [100, "Other expertise other cannot exceed 100 characters"],
             default: "",
         },
 

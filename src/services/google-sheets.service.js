@@ -28,13 +28,20 @@ class GoogleSheetsService {
             // private_key string value, which breaks JSON parsing.
             try {
 
-                // Replace literal newlines inside quoted strings with \n
-                // This handles cases where the private_key was copy-pasted
-                // with actual newlines instead of \n escape sequences.
-                // Use [\s\S] instead of [^"\\] to match newlines inside strings.
+                // Specifically target the private_key field to fix its newlines.
+                // This is more reliable than trying to fix all quoted strings.
                 const fixed = serviceAccountKey.replace(
-                    /("(?:[\s\S]*?)")/g,
-                    (match) => match.replace(/\n/g, "\\n").replace(/\r/g, "\\r")
+                    /("private_key"\s*:\s*")([\s\S]*?)(")/g,
+                    (match, prefix, keyContent, suffix) => {
+                        // Escape newlines and other special chars inside the private key
+                        const escapedKey = keyContent
+                            .replace(/\\/g, "\\\\")
+                            .replace(/\n/g, "\\n")
+                            .replace(/\r/g, "\\r")
+                            .replace(/\t/g, "\\t")
+                            .replace(/"/g, "\\\"");
+                        return `${prefix}${escapedKey}${suffix}`;
+                    }
                 );
 
                 return JSON.parse(fixed);
@@ -45,6 +52,46 @@ class GoogleSheetsService {
                 throw firstError;
 
             }
+
+        }
+
+    }
+
+    _validatePrivateKey(privateKey) {
+
+        if (!privateKey || typeof privateKey !== "string") {
+
+            throw new Error("Private key is missing or invalid.");
+
+        }
+
+        const trimmedKey = privateKey.trim();
+
+        if (!trimmedKey.includes("-----BEGIN PRIVATE KEY-----")) {
+
+            throw new Error(
+                "Private key is missing the required PEM header '-----BEGIN PRIVATE KEY-----'. " +
+                "Please ensure you are using the full service account JSON key from Google Cloud Console."
+            );
+
+        }
+
+        if (!trimmedKey.includes("-----END PRIVATE KEY-----")) {
+
+            throw new Error(
+                "Private key is missing the required PEM footer '-----END PRIVATE KEY-----'. " +
+                "Please ensure you are using the full service account JSON key from Google Cloud Console."
+            );
+
+        }
+
+        // Check for common corruption signs
+        if (trimmedKey.includes("\\n") || trimmedKey.includes("\\r")) {
+
+            throw new Error(
+                "Private key contains escaped newline sequences (\\n or \\r) instead of actual newlines. " +
+                "The private key should contain actual newlines, not escaped sequences."
+            );
 
         }
 
@@ -70,6 +117,9 @@ class GoogleSheetsService {
 
             const credentials = this._parseServiceAccountKey(serviceAccountKey);
 
+            // Validate the private key format before using it
+            this._validatePrivateKey(credentials.private_key);
+
             this.auth = new google.auth.GoogleAuth({
 
                 credentials,
@@ -81,6 +131,16 @@ class GoogleSheetsService {
             return this.auth;
 
         } catch (error) {
+
+            if (error.message.includes("DECODER")) {
+
+                throw new Error(
+                    `Failed to decode Google service account private key: ${error.message}. ` +
+                    `This usually means the private key format is invalid or corrupted. ` +
+                    `Please re-download the service account JSON key from Google Cloud Console.`
+                );
+
+            }
 
             throw new Error(`Failed to parse Google service account key: ${error.message}`);
 
@@ -122,11 +182,8 @@ class GoogleSheetsService {
             application.organisation || "",
             application.yearsExperience || "",
             application.primaryIndustry || "",
-            application.primaryIndustryOther || "",
             application.primaryExpertise || "",
-            application.primaryExpertiseOther || "",
             application.otherExpertise || "",
-            application.otherExpertiseOther || "",
             application.notableAchievement || "",
             application.businessChallenge || "",
             application.certifications || "",
@@ -134,17 +191,36 @@ class GoogleSheetsService {
             application.additionalInfo || "",
             application.consent || "",
             application.cv?.url || "",
-            application._id?.toString() || "",
         ];
 
-        await sheets.spreadsheets.values.append({
-            spreadsheetId: this.spreadsheetId,
-            range: `${this.sheetName}!A1`,
-            valueInputOption: "USER_ENTERED",
-            requestBody: {
-                values: [row],
-            },
-        });
+        try {
+
+            await sheets.spreadsheets.values.append({
+                spreadsheetId: this.spreadsheetId,
+                range: `${this.sheetName}!A1`,
+                valueInputOption: "USER_ENTERED",
+                requestBody: {
+                    values: [row],
+                },
+            });
+
+        } catch (error) {
+
+            // Provide more helpful error messages for common issues
+            if (error.message?.includes("Requested entity was not found") || error.code === 404) {
+
+                throw new Error(
+                    `Google Sheets spreadsheet not found. Please verify:\n` +
+                    `1. The spreadsheet ID (${this.spreadsheetId}) is correct.\n` +
+                    `2. The service account (${this.auth?.credentials?.client_email || "check GOOGLE_SERVICE_ACCOUNT_KEY"}) has been granted "Editor" access to the spreadsheet.\n` +
+                    `3. The sheet name "${this.sheetName}" exists in the spreadsheet.`
+                );
+
+            }
+
+            throw error;
+
+        }
 
     }
 

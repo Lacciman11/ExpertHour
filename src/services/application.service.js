@@ -125,9 +125,13 @@ class ApplicationService {
 
         } catch (error) {
 
-            console.error("[ApplicationService] Google Sheets sync failed:", error.message);
+    console.error("[ApplicationService] Google Sheets sync failed");
+    console.error("Message:", error.message);
+    console.error("Code:", error.code);
+    console.error("Status:", error.response?.status);
+    console.error("Google response:", error.response?.data);
 
-            await Application.findByIdAndUpdate(application._id, {
+    await Application.findByIdAndUpdate(application._id, {
 
                 googleSheetSynced: false,
 
