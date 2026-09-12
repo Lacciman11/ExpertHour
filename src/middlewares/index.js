@@ -27,15 +27,12 @@ const registerMiddlewares = (app) => {
     app.use(express.urlencoded({ extended: true }));
 
     // Enable CORS
-    const allowedOrigins = env.appUrl ? [env.appUrl] : []
-
-    // Allow Vite dev server in development
-    if (process.env.NODE_ENV === 'development') {
-        allowedOrigins.push('http://localhost:5001', 'http://127.0.0.1:3000')
-    }
-
-    // Always allow localhost:5000 for frontend dev server
-    allowedOrigins.push('http://localhost:5000')
+const allowedOrigins = [
+    env.appUrl,
+    process.env.FRONTEND_URL,
+    "http://localhost:5000",
+    "http://localhost:5173",
+].filter(Boolean);
 
     app.use(
         cors({
