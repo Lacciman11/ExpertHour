@@ -238,7 +238,6 @@ class ConsultationSessionFinancialService {
         const booking = await Booking.findById(session.bookingId);
         const payment = await Payment.findOne({
             bookingId: session.bookingId,
-            status: "success",
         });
 
         // -------------------------------------------------------------------

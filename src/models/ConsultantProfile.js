@@ -192,6 +192,11 @@ const consultantProfileSchema = new mongoose.Schema(
             },
         },
 
+        googleEmail: {
+            type: String,
+            default: "",
+        },
+
         payoutMethod: {
             type: String,
             enum: {

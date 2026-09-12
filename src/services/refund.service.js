@@ -187,12 +187,11 @@ function calculateAdjustedValues(earning, newAdjustmentAmount) {
  */
 function canProcessRefund(earning) {
     if (earning.status === EARNING_STATUS.PAID) {
-        // Post-payout refund: allowed, but it creates a recovery obligation
-        // against the consultant instead of adjusting the (already paid) earning.
+        // Post-payout refunds are not supported in this phase.
+        // The earning's financial snapshot is immutable after payout.
         return {
-            allowed: true,
-            recovery: true,
-            warning: "Earning already paid. Creating post-payout recovery obligation.",
+            allowed: false,
+            reason: "Earning already paid. Use post-payout recovery process.",
         };
     }
 
@@ -1032,6 +1031,9 @@ class RefundService {
 
                 // Post-payout recovery path: earning is already PAID.
                 const refundCheck = canProcessRefund(earningInTx);
+                if (!refundCheck.allowed) {
+                    throw new ApiError(400, refundCheck.reason);
+                }
                 if (refundCheck.recovery) {
                     const recoveryResult = await processRecovery({
                         earning: earningInTx,

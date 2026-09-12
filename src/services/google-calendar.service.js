@@ -11,6 +11,10 @@ class GoogleCalendarService {
         const { clientId, redirectUri } = env.googleCalendar;
         const scopes = [
             "https://www.googleapis.com/auth/calendar.events",
+            "https://www.googleapis.com/auth/meetings.space.readonly",
+            "https://www.googleapis.com/auth/meetings.conferenceRecords.readonly",
+            "https://www.googleapis.com/auth/meetings.participants.readonly",
+            "https://www.googleapis.com/auth/meetings.attendance.readonly",
         ].join(" ");
 
         const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
@@ -154,8 +158,14 @@ class GoogleCalendarService {
         );
 
         const meetingLink = response.data.hangoutLink;
+        const googleEventId = response.data.id || "";
+        const googleConferenceId = response.data.conferenceData?.conferenceId || "";
 
-        return meetingLink;
+        return {
+            meetingLink,
+            googleEventId,
+            googleConferenceId,
+        };
     }
 
     async updateEvent(consultantId, bookingId, date, time, duration, timezone = APP_TIMEZONE) {
@@ -214,8 +224,14 @@ class GoogleCalendarService {
         );
 
         const meetingLink = response.data.hangoutLink || searchResponse.data.items[0].hangoutLink;
+        const googleEventId = eventId;
+        const googleConferenceId = response.data.conferenceData?.conferenceId || searchResponse.data.items[0].conferenceData?.conferenceId || "";
 
-        return meetingLink;
+        return {
+            meetingLink,
+            googleEventId,
+            googleConferenceId,
+        };
     }
 
     async createEventAndGetMeetLink(bookingId, date, time, duration, consultantId, clientId) {

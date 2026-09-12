@@ -60,6 +60,16 @@ const bookingSchema = new mongoose.Schema(
             default: "",
         },
 
+        googleEventId: {
+            type: String,
+            default: "",
+        },
+
+        googleConferenceId: {
+            type: String,
+            default: "",
+        },
+
         notes: {
             type: String,
             maxlength: [500, "Notes cannot exceed 500 characters"],

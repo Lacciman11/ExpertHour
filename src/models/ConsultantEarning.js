@@ -415,12 +415,17 @@ consultantEarningSchema.pre("validate", function () {
             );
         }
 
-        const expectedAdjustment = this.grossAmount - this.adjustedGrossAmount;
-        if (this.adjustmentAmount !== expectedAdjustment) {
-            this.invalidate(
-                "adjustmentAmount",
-                `Adjustment amount (${this.adjustmentAmount}) must equal grossAmount (${this.grossAmount}) - adjustedGrossAmount (${this.adjustedGrossAmount}) = ${expectedAdjustment}`
-            );
+        // For zero-grossAmount earnings (e.g., CONSULTANT_NO_SHOW), the refund
+        // amount is based on the original Payment, not the earning's grossAmount.
+        // Allow adjustmentAmount to exceed grossAmount in that case.
+        if (this.grossAmount > 0) {
+            const expectedAdjustment = this.grossAmount - this.adjustedGrossAmount;
+            if (this.adjustmentAmount !== expectedAdjustment) {
+                this.invalidate(
+                    "adjustmentAmount",
+                    `Adjustment amount (${this.adjustmentAmount}) must equal grossAmount (${this.grossAmount}) - adjustedGrossAmount (${this.adjustedGrossAmount}) = ${expectedAdjustment}`
+                );
+            }
         }
 
         if (this.adjustedGrossAmount > this.grossAmount) {
@@ -462,14 +467,17 @@ consultantEarningSchema.pre("validate", function () {
             }
         }
 
-        if (runningCumulative > this.grossAmount) {
+        // For zero-grossAmount earnings (e.g., CONSULTANT_NO_SHOW), the refund
+        // amount is based on the original Payment, not the earning's grossAmount.
+        // Allow cumulative refunds to exceed grossAmount in that case.
+        if (this.grossAmount > 0 && runningCumulative > this.grossAmount) {
             this.invalidate(
                 "refundHistory",
                 `Cumulative refunds (${runningCumulative}) cannot exceed grossAmount (${this.grossAmount})`
             );
         }
 
-        if (this.adjustmentAmount !== runningCumulative) {
+        if (this.grossAmount > 0 && this.adjustmentAmount !== runningCumulative) {
             this.invalidate(
                 "adjustmentAmount",
                 `adjustmentAmount (${this.adjustmentAmount}) must equal cumulative refunds (${runningCumulative})`

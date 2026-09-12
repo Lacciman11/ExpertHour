@@ -1200,10 +1200,11 @@ class PaymentService {
             // 16. External side effects AFTER successful DB commit.
             // Do NOT put external calls inside the MongoDB transaction.
             let meetingLink = booking.meetingLink;
+            let calendarResult = null;
 
             try {
 
-                meetingLink = await googleCalendarService.createEventAndGetMeetLink(
+                calendarResult = await googleCalendarService.createEventAndGetMeetLink(
                     booking._id,
                     booking.date,
                     booking.time,
@@ -1212,12 +1213,30 @@ class PaymentService {
                     booking.clientId
                 );
 
-                // Only update meetingLink if it changed to avoid unnecessary writes.
-                if (meetingLink && meetingLink !== booking.meetingLink) {
+                // Support both legacy string return and new object return.
+                if (typeof calendarResult === "string") {
+                    meetingLink = calendarResult;
+                } else if (calendarResult && typeof calendarResult === "object") {
+                    meetingLink = calendarResult.meetingLink || meetingLink;
+                }
 
-                    booking.meetingLink = meetingLink;
+                // Only update booking if something changed to avoid unnecessary writes.
+                const needsUpdate =
+                    (meetingLink && meetingLink !== booking.meetingLink) ||
+                    (calendarResult?.googleEventId && calendarResult.googleEventId !== booking.googleEventId) ||
+                    (calendarResult?.googleConferenceId && calendarResult.googleConferenceId !== booking.googleConferenceId);
+
+                if (needsUpdate) {
+                    if (meetingLink) {
+                        booking.meetingLink = meetingLink;
+                    }
+                    if (calendarResult?.googleEventId) {
+                        booking.googleEventId = calendarResult.googleEventId;
+                    }
+                    if (calendarResult?.googleConferenceId) {
+                        booking.googleConferenceId = calendarResult.googleConferenceId;
+                    }
                     await booking.save();
-
                 }
 
             } catch (calendarError) {
@@ -1898,7 +1917,13 @@ class PaymentService {
 
             });
 
-            console.log(`[Email] Payment success emails sent for booking ${booking._id}`);
+            paymentLogger.info("payment_success_emails_sent", {
+
+                event: "payment_success_emails_sent",
+
+                bookingId: booking._id.toString(),
+
+            });
 
         } catch (error) {
 
@@ -2008,7 +2033,13 @@ class PaymentService {
 
             });
 
-            console.log(`[Email] Payment failure emails sent for booking ${booking._id}`);
+            paymentLogger.info("payment_failure_emails_sent", {
+
+                event: "payment_failure_emails_sent",
+
+                bookingId: booking._id.toString(),
+
+            });
 
         } catch (error) {
 
