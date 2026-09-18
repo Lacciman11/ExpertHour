@@ -460,11 +460,25 @@ class ConsultationSessionOutcomeService {
         // Conservative eligibility: scheduledEnd must have passed OR
         // consultantGraceEnd must have passed. This catches both
         // COMPLETED and CONSULTANT_NO_SHOW early.
+        //
+        // Google Meet timing guard: if a session has a non-empty
+        // googleConferenceRecordId but googleAttendanceSyncedAt is null,
+        // defer outcome finalization until the Google Meet attendance
+        // worker has had a chance to synchronize attendance data.
+        // This prevents the outcome worker from finalizing an outcome
+        // based on empty/incomplete attendanceEvents before Google Meet
+        // data is available.
         const sessions = await ConsultationSession.find({
             outcome: null,
             $or: [
                 { scheduledEnd: { $lte: now } },
                 { consultantGraceEnd: { $lte: now } },
+            ],
+            $nor: [
+                {
+                    googleConferenceRecordId: { $nin: ["", null] },
+                    googleAttendanceSyncedAt: null,
+                },
             ],
         })
             .limit(this.batchSize)

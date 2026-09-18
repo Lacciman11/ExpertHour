@@ -198,6 +198,25 @@ const consultationSessionSchema = new mongoose.Schema(
             type: Date,
             default: null,
         },
+
+        /**
+         * Google Meet conference record ID associated with this session.
+         * Set by the Google Meet attendance sync process.
+         * Used for idempotency checks during repeated synchronization.
+         */
+        googleConferenceRecordId: {
+            type: String,
+            default: "",
+        },
+
+        /**
+         * Timestamp of the last successful Google Meet attendance sync.
+         * Set by the Google Meet attendance sync process.
+         */
+        googleAttendanceSyncedAt: {
+            type: Date,
+            default: null,
+        },
     },
     {
         timestamps: true,

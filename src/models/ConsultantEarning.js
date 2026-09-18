@@ -662,9 +662,13 @@ consultantEarningSchema.methods.getRecoveryByReference = function (refundReferen
 /**
  * Get the total outstanding recovery balance across all of a consultant's earnings.
  * @param {string|object} consultantId - The consultant's user ID
+ * @param {object} [session] - Optional Mongoose session for transaction support
  * @returns {Promise<number>} Total outstanding recovery in kobo
  */
-consultantEarningSchema.statics.getTotalOutstandingRecovery = async function (consultantId) {
+consultantEarningSchema.statics.getTotalOutstandingRecovery = async function (
+    consultantId,
+    session
+) {
     const result = await this.aggregate([
         { $match: { consultantId: new mongoose.Types.ObjectId(consultantId) } },
         {
@@ -675,7 +679,7 @@ consultantEarningSchema.statics.getTotalOutstandingRecovery = async function (co
                 },
             },
         },
-    ]);
+    ]).session(session || null);
 
     return result.length > 0 ? result[0].total : 0;
 };

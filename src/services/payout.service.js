@@ -10,6 +10,7 @@ import {
     HOLD_REASON,
     MINIMUM_PAYOUT_KOBO,
 } from "../utils/constants.js";
+import { initiateTransfer } from "../services/paystack-transfer.service.js";
 
 // ---------------------------------------------------------------------------
 // Payable Amount Helpers
@@ -252,6 +253,25 @@ class PayoutService {
                 // 4. Calculate payout totals
                 const payoutCalculation = calculatePayout(eligibleEarnings);
 
+                // 4a. Apply recovery offset for post-payout refund obligations
+                const totalOutstandingRecovery = await ConsultantEarning.getTotalOutstandingRecovery(
+                    consultantId,
+                    mongoSession
+                );
+                const recoveryOffset = Math.min(
+                    totalOutstandingRecovery,
+                    payoutCalculation.netAmount
+                );
+                const adjustedNetAmount = payoutCalculation.netAmount - recoveryOffset;
+
+                if (recoveryOffset > 0) {
+                    await ConsultantEarning.applyRecoveryOffset(
+                        consultantId,
+                        recoveryOffset,
+                        mongoSession
+                    );
+                }
+
                 // 5. Create the payout
                 // Note: transferRecipientCode is required by the model but will be updated
                 // during Paystack integration. We use a placeholder for now.
@@ -265,7 +285,8 @@ class PayoutService {
                     earningCount: payoutCalculation.earningCount,
                     grossAmount: payoutCalculation.grossAmount,
                     totalCommission: payoutCalculation.totalCommission,
-                    netAmount: payoutCalculation.netAmount,
+                    netAmount: adjustedNetAmount,
+                    recoveryOffset: recoveryOffset,
                     status: PAYOUT_STATUS.PENDING,
                     transferRecipientCode: "RCP_PENDING", // Placeholder, updated during Paystack integration
                 }], { session: mongoSession });
@@ -550,6 +571,71 @@ class PayoutService {
     }
 
     /**
+     * Initiate a Paystack transfer for a PENDING payout.
+     *
+     * Generates a deterministic transfer reference from the payout ID,
+     * calls Paystack to initiate the transfer, and marks the payout as PROCESSING.
+     *
+     * @param {string} payoutId - The payout ID
+     * @param {string} recipientCode - Paystack transfer recipient code
+     * @param {string} [reason="Consultant payout"] - Transfer reason
+     * @returns {Promise<object>} The updated payout
+     * @throws {ApiError} If payout not found, not PENDING, or transfer initiation fails
+     */
+    async initiatePayoutTransfer(payoutId, recipientCode, reason = "Consultant payout") {
+        const payout = await Payout.findById(payoutId);
+
+        if (!payout) {
+            throw new ApiError(404, "Payout not found");
+        }
+
+        if (payout.status !== PAYOUT_STATUS.PENDING) {
+            throw new ApiError(400, `Cannot initiate transfer for payout in ${payout.status} status`);
+        }
+
+        // Zero-net payout: recovery fully consumed the consultant's entitlement.
+        // No Paystack transfer is needed. Complete the payout directly so that
+        // included earnings transition to PAID via the existing completion path.
+        if (payout.netAmount === 0) {
+            return this.markPayoutAsCompleted(payoutId);
+        }
+
+        // Deterministic reference: stable across retries/restarts
+        const transferReference = `TRF-${payout._id.toString()}`;
+
+        let transferResult;
+        try {
+            transferResult = await initiateTransfer({
+                amount: payout.netAmount,
+                recipientCode,
+                reference: transferReference,
+                reason,
+            });
+        } catch (error) {
+            // If Paystack explicitly rejects (client error), mark as failed
+            if (error.message.includes("Paystack API error (4") && !error.message.includes("429")) {
+                await this.markPayoutAsFailed(payoutId, `Paystack rejected transfer: ${error.message}`);
+            }
+            // For ambiguous errors (timeout, network, 429), re-throw without marking failed
+            throw error;
+        }
+
+        // Persist transfer details and mark as PROCESSING
+        const updatedPayout = await this.markPayoutAsProcessing(
+            payoutId,
+            transferResult.reference
+        );
+
+        // Persist Paystack transfer code if returned
+        if (transferResult.transferCode) {
+            updatedPayout.paystackTransferCode = transferResult.transferCode;
+            await updatedPayout.save();
+        }
+
+        return updatedPayout;
+    }
+
+    /**
      * Mark a payout as completed (Paystack transfer successful).
      * Updates all included earnings to PAID status.
      * Runs in a MongoDB transaction so payout and earning states stay consistent.
@@ -568,7 +654,9 @@ class PayoutService {
                     throw new ApiError(404, "Payout not found");
                 }
 
-                if (payout.status !== PAYOUT_STATUS.PROCESSING) {
+                // Allow direct completion for zero-net payouts (recovery-settled, no transfer needed)
+                const isZeroNetPayout = payout.status === PAYOUT_STATUS.PENDING && payout.netAmount === 0;
+                if (payout.status !== PAYOUT_STATUS.PROCESSING && !isZeroNetPayout) {
                     throw new ApiError(400, `Cannot complete payout in ${payout.status} status`);
                 }
 

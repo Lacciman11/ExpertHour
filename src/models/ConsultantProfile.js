@@ -211,6 +211,11 @@ const consultantProfileSchema = new mongoose.Schema(
             maxlength: [100, "Bank name cannot exceed 100 characters"],
         },
 
+        bankCode: {
+            type: String,
+            maxlength: [10, "Bank code cannot exceed 10 characters"],
+        },
+
         accountNumber: {
             type: String,
             maxlength: [10, "Account number cannot exceed 10 characters"],
@@ -219,6 +224,11 @@ const consultantProfileSchema = new mongoose.Schema(
         accountName: {
             type: String,
             maxlength: [100, "Account name cannot exceed 100 characters"],
+        },
+
+        paystackRecipientCode: {
+            type: String,
+            default: "",
         },
 
         payoneerId: {

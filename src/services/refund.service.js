@@ -187,11 +187,12 @@ function calculateAdjustedValues(earning, newAdjustmentAmount) {
  */
 function canProcessRefund(earning) {
     if (earning.status === EARNING_STATUS.PAID) {
-        // Post-payout refunds are not supported in this phase.
-        // The earning's financial snapshot is immutable after payout.
+        // Post-payout refunds create a recovery obligation instead of
+        // modifying the immutable earning snapshot.
         return {
-            allowed: false,
-            reason: "Earning already paid. Use post-payout recovery process.",
+            allowed: true,
+            recovery: true,
+            warning: "Earning already paid. Created post-payout recovery obligation.",
         };
     }
 

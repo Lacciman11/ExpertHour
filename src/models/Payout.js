@@ -2,7 +2,6 @@ import mongoose from "mongoose";
 
 import {
     PAYOUT_STATUS,
-    MINIMUM_PAYOUT_KOBO,
 } from "../utils/constants.js";
 
 // ---------------------------------------------------------------------------
@@ -123,7 +122,13 @@ const payoutSchema = new mongoose.Schema(
         netAmount: {
             type: Number,
             required: [true, "Net amount is required"],
-            min: [MINIMUM_PAYOUT_KOBO, `Net amount must be at least ₦10,000 (${MINIMUM_PAYOUT_KOBO} kobo)`],
+            min: [0, "Net amount cannot be negative"],
+        },
+        recoveryOffset: {
+            type: Number,
+            required: [true, "Recovery offset is required"],
+            default: 0,
+            min: [0, "Recovery offset cannot be negative"],
         },
 
         // === Status ===
@@ -248,16 +253,18 @@ payoutSchema.pre("validate", function () {
 
 /**
  * Validate financial summary balances.
- * grossAmount should equal totalCommission + netAmount (approximately, due to rounding).
+ * grossAmount should equal totalCommission + netAmount + recoveryOffset
+ * (approximately, due to rounding).
  */
 payoutSchema.pre("validate", function () {
     if (this.grossAmount !== undefined && this.totalCommission !== undefined && this.netAmount !== undefined) {
-        const expectedGross = this.totalCommission + this.netAmount;
+        const recoveryOffset = this.recoveryOffset || 0;
+        const expectedGross = this.totalCommission + this.netAmount + recoveryOffset;
         // Allow for rounding differences of up to 1 kobo
         if (Math.abs(this.grossAmount - expectedGross) > 1) {
             this.invalidate(
                 "grossAmount",
-                `Gross amount (${this.grossAmount}) must equal totalCommission (${this.totalCommission}) + netAmount (${this.netAmount}) = ${expectedGross}`
+                `Gross amount (${this.grossAmount}) must equal totalCommission (${this.totalCommission}) + netAmount (${this.netAmount}) + recoveryOffset (${recoveryOffset}) = ${expectedGross}`
             );
         }
     }

@@ -12,6 +12,7 @@ import {
     EARNING_STATUS,
     HOLD_REASON,
     PLATFORM_COMMISSION_RATE,
+    BOOKING_STATUS,
 } from "../utils/constants.js";
 
 // ---------------------------------------------------------------------------
@@ -386,11 +387,40 @@ class ConsultantEarningService {
     async markEligibleEarnings(beforeDate = null) {
         const now = beforeDate || new Date();
 
+        // Find all PENDING earnings whose eligibility period has passed.
+        const eligibleEarnings = await ConsultantEarning.find({
+            status: EARNING_STATUS.PENDING,
+            eligibleAt: { $lte: now },
+        });
+
+        if (eligibleEarnings.length === 0) {
+            return 0;
+        }
+
+        // Load associated bookings to verify they are still valid.
+        const bookingIds = [...new Set(eligibleEarnings.map((e) => String(e.bookingId)))];
+        const bookings = await Booking.find({
+            _id: { $in: bookingIds.map((id) => new mongoose.Types.ObjectId(id)) },
+        });
+        const cancelledBookingIds = new Set(
+            bookings
+                .filter((b) => b.status === BOOKING_STATUS.CANCELLED)
+                .map((b) => String(b._id))
+        );
+
+        // Filter out earnings whose bookings have been cancelled.
+        const transitionableEarnings = eligibleEarnings.filter(
+            (e) => !cancelledBookingIds.has(String(e.bookingId))
+        );
+
+        if (transitionableEarnings.length === 0) {
+            return 0;
+        }
+
+        const transitionableIds = transitionableEarnings.map((e) => e._id);
+
         const result = await ConsultantEarning.updateMany(
-            {
-                status: EARNING_STATUS.PENDING,
-                eligibleAt: { $lte: now },
-            },
+            { _id: { $in: transitionableIds }, status: EARNING_STATUS.PENDING },
             {
                 $set: { status: EARNING_STATUS.ELIGIBLE },
                 $push: {

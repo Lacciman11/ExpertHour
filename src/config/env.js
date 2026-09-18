@@ -95,6 +95,34 @@ const env = {
     },
 
     // ---------------------------------------------------------------------------
+    // Payout Reconciliation
+    // ---------------------------------------------------------------------------
+
+    payoutReconciliation: {
+
+        intervalMs: parseInt(process.env.PAYOUT_RECONCILIATION_INTERVAL_MS || "300000", 10),
+
+        delayMs: parseInt(process.env.PAYOUT_RECONCILIATION_DELAY_MS || "5000", 10),
+
+        batchSize: parseInt(process.env.PAYOUT_RECONCILIATION_BATCH_SIZE || "20", 10),
+
+    },
+
+    // ---------------------------------------------------------------------------
+    // Google Meet Attendance Sync
+    // ---------------------------------------------------------------------------
+
+    googleMeetAttendance: {
+
+        intervalMs: parseInt(process.env.GOOGLE_MEET_ATTENDANCE_INTERVAL_MS || "300000", 10),
+
+        syncRetryIntervalMs: parseInt(process.env.GOOGLE_MEET_ATTENDANCE_RETRY_INTERVAL_MS || "3600000", 10),
+
+        batchSize: parseInt(process.env.GOOGLE_MEET_ATTENDANCE_BATCH_SIZE || "20", 10),
+
+    },
+
+    // ---------------------------------------------------------------------------
     // Paystack
     // ---------------------------------------------------------------------------
 

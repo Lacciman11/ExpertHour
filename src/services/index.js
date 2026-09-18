@@ -19,6 +19,7 @@ import reviewService from "./review.service.js";
 import googleCalendarService from "./google-calendar.service.js";
 import paymentReconciliationService from "./payment-reconciliation.service.js";
 import refundReconciliationService from "./refund-reconciliation.service.js";
+import payoutReconciliationService from "./payout-reconciliation.service.js";
 import passwordResetService from "./password-reset-token.service.js";
 import emailVerificationService from "./email-verification-token.service.js";
 import userService from "./user.service.js";
@@ -51,6 +52,7 @@ export {
     googleCalendarService,
     paymentReconciliationService,
     refundReconciliationService,
+    payoutReconciliationService,
     passwordResetService,
     resetPasswordService,
     passwordResetTokenService,

@@ -568,6 +568,123 @@ class ConsultationSessionService {
 
         return session;
     }
+
+    // -----------------------------------------------------------------------
+    // Google Meet attendance sync (server-only, idempotent)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Compare two attendance event arrays by their meaningful fields,
+     * ignoring Mongoose-specific metadata like _id.
+     */
+    static _eventsEqual(a, b) {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) {
+            const ea = a[i];
+            const eb = b[i];
+            if (
+                ea.participant !== eb.participant ||
+                ea.joinedAt.getTime() !== eb.joinedAt.getTime() ||
+                (ea.leftAt ? ea.leftAt.getTime() : null) !==
+                    (eb.leftAt ? eb.leftAt.getTime() : null) ||
+                ea.durationSeconds !== eb.durationSeconds
+            ) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Persist verified Google Meet attendance into a ConsultationSession.
+     *
+     * Trust boundary:
+     * - Only Google-controlled fields are modified: attendanceEvents,
+     *   googleConferenceRecordId, googleAttendanceSyncedAt.
+     * - Server-derived fields (attendanceStatus, startedAt, endedAt,
+     *   clientJoinedAt, consultantJoinedAt, durations, met-flags, outcome,
+     *   outcomeFinalizedAt, scheduled window, lastReconciledAt) are NEVER
+     *   touched by this method.
+     * - This method does NOT trigger financial processing or outcome
+     *   determination.
+     *
+     * Idempotency:
+     * - If the session has already been synced with the same
+     *   conferenceRecordId and the attendanceEvents are identical,
+     *   the call is a no-op and returns the existing session.
+     * - If the conferenceRecordId matches but events differ, the events
+     *   are replaced.
+     * - If the conferenceRecordId is new or empty, the events are replaced.
+     *
+     * @param {Object} params
+     * @param {string} params.bookingId - Booking ID
+     * @param {string} params.conferenceRecordId - Google conference record ID
+     * @param {Array} params.attendanceEvents - Verified attendance events
+     * @returns {Promise<ConsultationSession>} Updated session
+     */
+    async syncGoogleAttendance({ bookingId, conferenceRecordId, attendanceEvents }) {
+        if (!bookingId || typeof conferenceRecordId !== "string" || conferenceRecordId.trim() === "") {
+            throw new ApiError(400, "bookingId and conferenceRecordId are required");
+        }
+
+        if (!Array.isArray(attendanceEvents)) {
+            throw new ApiError(400, "attendanceEvents must be an array");
+        }
+
+        // Validate each event structure without mutating.
+        for (const event of attendanceEvents) {
+            if (!event || typeof event !== "object") {
+                throw new ApiError(400, "Each attendance event must be an object");
+            }
+            if (!["client", "consultant"].includes(event.participant)) {
+                throw new ApiError(400, "Invalid participant in attendance event");
+            }
+            if (!(event.joinedAt instanceof Date) || Number.isNaN(event.joinedAt.getTime())) {
+                throw new ApiError(400, "Invalid joinedAt in attendance event");
+            }
+            if (event.leftAt !== null && !(event.leftAt instanceof Date)) {
+                throw new ApiError(400, "Invalid leftAt in attendance event");
+            }
+            if (typeof event.durationSeconds !== "number" || event.durationSeconds < 0) {
+                throw new ApiError(400, "Invalid durationSeconds in attendance event");
+            }
+        }
+
+        const session = await ConsultationSession.findOne({ bookingId });
+        if (!session) {
+            throw new ApiError(404, "ConsultationSession not found for booking");
+        }
+
+        // Idempotency: if already synced with the same conference record,
+        // compare events to avoid blind overwrite.
+        if (
+            session.googleConferenceRecordId === conferenceRecordId &&
+            session.googleAttendanceSyncedAt instanceof Date &&
+            !Number.isNaN(session.googleAttendanceSyncedAt.getTime())
+        ) {
+            if (ConsultationSessionService._eventsEqual(session.attendanceEvents || [], attendanceEvents)) {
+                // Already synced with identical data — no-op.
+                return session;
+            }
+            // Same conference record but different events — proceed to update.
+        }
+
+        // Use findOneAndUpdate to ensure ONLY Google-controlled fields are
+        // modified. This prevents accidental writes to protected fields.
+        const updated = await ConsultationSession.findOneAndUpdate(
+            { bookingId, _id: session._id },
+            {
+                $set: {
+                    attendanceEvents: attendanceEvents,
+                    googleConferenceRecordId: conferenceRecordId,
+                    googleAttendanceSyncedAt: new Date(),
+                },
+            },
+            { new: true }
+        );
+
+        return updated;
+    }
 }
 
 // ---------------------------------------------------------------------------

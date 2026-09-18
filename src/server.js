@@ -8,6 +8,8 @@ import earningEligibilityService from "./services/earning-eligibility.service.js
 import paymentReconciliationService from "./services/payment-reconciliation.service.js";
 import refundReconciliationService from "./services/refund-reconciliation.service.js";
 import payoutProcessingService from "./services/payout-processing.service.js";
+import payoutReconciliationService from "./services/payout-reconciliation.service.js";
+import googleMeetAttendanceWorker from "./services/google-meet-attendance.worker.js";
 
 import env from "./config/env.js";
 import paymentLogger from "./utils/logger.js";
@@ -72,6 +74,12 @@ function startWorkers() {
     // Payout processing worker: creates payout cycles for eligible earnings
     payoutProcessingService.start();
 
+    // Payout reconciliation worker: recovers PROCESSING payouts after crash
+    payoutReconciliationService.start();
+
+    // Google Meet attendance sync worker: synchronizes Google Meet attendance
+    googleMeetAttendanceWorker.start();
+
     paymentLogger.info("workers_started", {
 
         event: "workers_started",
@@ -101,6 +109,8 @@ async function gracefulShutdown(signal) {
     paymentReconciliationService.stop();
     refundReconciliationService.stop();
     payoutProcessingService.stop();
+    payoutReconciliationService.stop();
+    googleMeetAttendanceWorker.stop();
 
     // Close HTTP server
     if (server) {
