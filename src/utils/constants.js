@@ -134,3 +134,11 @@ export const APP_TIMEZONE_UTC_OFFSET = "+01:00";
 // Using integer timestamp arithmetic avoids floating-point hour calculations
 // (difference / (1000 * 60 * 60)) that are imprecise at the boundary.
 export const CANCELLATION_WINDOW_MS = 36 * 60 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// Slot Granularity
+// ---------------------------------------------------------------------------
+
+// Each booking claims one or more 30-minute slot locks.
+// The available-slots endpoint and booking service both use this granularity.
+export const SLOT_GRANULARITY_MINUTES = 30;

@@ -30,7 +30,7 @@ export const createConsultantProfileValidator = [
         }),
 
     body("hourlyRate")
-        .isFloat({ min: 0 })
+        .isFloat({ min: 0, finite: true })
         .withMessage("Hourly rate must be a positive number"),
 
     body("currency")
@@ -140,7 +140,7 @@ export const updateConsultantProfileValidator = [
 
     body("hourlyRate")
         .optional()
-        .isFloat({ min: 0 })
+        .isFloat({ min: 0, finite: true })
         .withMessage("Hourly rate must be a positive number"),
 
     body("currency")
@@ -188,31 +188,93 @@ export const updateConsultantProfileValidator = [
         .isURL()
         .withMessage("LinkedIn must be a valid URL"),
 
+];
+
+export const bankListValidator = [];
+
+export const verifyAccountValidator = [
+    query("accountNumber")
+        .notEmpty()
+        .withMessage("accountNumber is required")
+        .isLength({ min: 10, max: 10 })
+        .withMessage("accountNumber must be exactly 10 digits")
+        .matches(/^\d+$/)
+        .withMessage("accountNumber must contain only digits"),
+    query("bankCode")
+        .notEmpty()
+        .withMessage("bankCode is required")
+        .matches(/^\d+$/)
+        .withMessage("bankCode must contain only digits"),
+];
+
+export const payoutSettingsValidator = [
     body("payoutMethod")
         .optional()
         .isIn(["paystack", "payoneer"])
         .withMessage("Payout method must be paystack or payoneer"),
-
     body("bankName")
         .optional()
         .isLength({ max: 100 })
         .withMessage("Bank name cannot exceed 100 characters"),
-
+    body("bankCode")
+        .optional()
+        .matches(/^\d+$/)
+        .withMessage("Bank code must contain only digits"),
     body("accountNumber")
         .optional()
-        .isLength({ max: 10 })
-        .withMessage("Account number cannot exceed 10 characters"),
-
+        .matches(/^\d+$/)
+        .withMessage("Account number must contain only digits")
+        .isLength({ min: 10, max: 10 })
+        .withMessage("Account number must be exactly 10 digits"),
     body("accountName")
         .optional()
         .isLength({ max: 100 })
-        .withMessage("Account name cannot exceed 100 characters"),
-
+        .withMessage("Account name cannot exceed 100 characters")
+        .custom((value) => {
+            if (value && value.trim() === "") {
+                throw new Error("Account name cannot be empty");
+            }
+            return true;
+        }),
     body("payoneerId")
         .optional()
         .isLength({ max: 100 })
         .withMessage("Payoneer ID cannot exceed 100 characters"),
+];
 
+export const updatePayoutSettingsValidator = [
+    body("payoutMethod")
+        .optional()
+        .isIn(["paystack", "payoneer"])
+        .withMessage("Payout method must be paystack or payoneer"),
+    body("bankName")
+        .optional()
+        .isLength({ max: 100 })
+        .withMessage("Bank name cannot exceed 100 characters"),
+    body("bankCode")
+        .optional()
+        .matches(/^\d+$/)
+        .withMessage("Bank code must contain only digits"),
+    body("accountNumber")
+        .optional()
+        .matches(/^\d+$/)
+        .withMessage("Account number must contain only digits")
+        .isLength({ min: 10, max: 10 })
+        .withMessage("Account number must be exactly 10 digits"),
+    body("accountName")
+        .optional()
+        .isLength({ max: 100 })
+        .withMessage("Account name cannot exceed 100 characters")
+        .custom((value) => {
+            if (value && value.trim() === "") {
+                throw new Error("Account name cannot be empty");
+            }
+            return true;
+        }),
+    body("payoneerId")
+        .optional()
+        .isLength({ max: 100 })
+        .withMessage("Payoneer ID cannot exceed 100 characters"),
 ];
 
 export const consultantSearchValidator = [
@@ -252,6 +314,11 @@ export const consultantSearchValidator = [
         .isString()
         .withMessage("Category must be a string"),
 
+    query("sort")
+        .optional()
+        .isIn(["newest", "price-asc", "price-desc", "name-asc"])
+        .withMessage("Sort must be one of: newest, price-asc, price-desc, name-asc"),
+
     query("page")
         .optional()
         .isInt({ min: 1 })
@@ -262,4 +329,22 @@ export const consultantSearchValidator = [
         .isInt({ min: 1, max: 50 })
         .withMessage("Limit must be between 1 and 50"),
 
+];
+
+export const availableSlotsValidator = [
+    query("date")
+        .notEmpty()
+        .withMessage("date is required")
+        .isString()
+        .withMessage("date must be a string (YYYY-MM-DD)"),
+    query("duration")
+        .optional()
+        .isInt({ min: 30 })
+        .withMessage("duration must be a positive integer (minutes)")
+        .custom((value) => {
+            if (value % 30 !== 0) {
+                throw new Error("duration must be a multiple of 30 minutes");
+            }
+            return true;
+        }),
 ];

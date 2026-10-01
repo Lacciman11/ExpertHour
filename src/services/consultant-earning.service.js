@@ -13,6 +13,7 @@ import {
     HOLD_REASON,
     PLATFORM_COMMISSION_RATE,
     BOOKING_STATUS,
+    APP_TIMEZONE,
 } from "../utils/constants.js";
 
 // ---------------------------------------------------------------------------
@@ -354,27 +355,296 @@ class ConsultantEarningService {
         return earning;
     }
 
+    // -----------------------------------------------------------------------
+    // Lagos Timezone Helpers
+    // -----------------------------------------------------------------------
+
     /**
-     * Get earnings by consultant ID.
+     * Convert an inclusive Lagos calendar date string (YYYY-MM-DD) to a UTC
+     * Date representing the start of that day in Lagos time.
+     *
+     * Lagos is Africa/Lagos (UTC+1, no DST). Lagos midnight (00:00:00) on a
+     * given calendar date corresponds to 23:00:00 UTC on the previous day.
+     *
+     * @param {string} dateStr - Date string in YYYY-MM-DD format
+     * @returns {Date} UTC Date at Lagos midnight for the given date
+     */
+    _lagosDateToUTC(dateStr) {
+        const [year, month, day] = dateStr.split("-").map(Number);
+        // month is 1-based in YYYY-MM-DD; Date.UTC expects 0-based month
+        // Lagos is UTC+1, so Lagos 00:00:00 = UTC 23:00:00 of the previous day
+        const utcMidnight = Date.UTC(year, month - 1, day, 0, 0, 0);
+        return new Date(utcMidnight - 1 * 60 * 60 * 1000);
+    }
+
+    /**
+     * Validate a YYYY-MM-DD date string.
+     * @param {string} dateStr - Date string to validate
+     * @throws {ApiError} If the date is malformed or impossible
+     */
+    _validateLagosDate(dateStr, fieldName = "date") {
+        if (typeof dateStr !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+            throw new ApiError(400, `Invalid ${fieldName} format. Expected YYYY-MM-DD.`);
+        }
+
+        const [year, month, day] = dateStr.split("-").map(Number);
+
+        if (month < 1 || month > 12) {
+            throw new ApiError(400, `Invalid ${fieldName}: month must be between 01 and 12.`);
+        }
+
+        // Check for impossible dates (e.g., Feb 31)
+        const testDate = new Date(Date.UTC(year, month - 1, day));
+        if (
+            testDate.getUTCFullYear() !== year ||
+            testDate.getUTCMonth() !== month - 1 ||
+            testDate.getUTCDate() !== day
+        ) {
+            throw new ApiError(400, `Invalid ${fieldName}: ${dateStr} is not a valid calendar date.`);
+        }
+    }
+
+    /**
+     * Build MongoDB createdAt date-range filter from optional Lagos calendar
+     * date strings.
+     *
+     * Semantics:
+     *   - `from` is inclusive: createdAt >= Lagos from-date 00:00:00
+     *   - `to` is inclusive: createdAt < Lagos day-after-to-date 00:00:00
+     *
+     * @param {string|null} [from] - Inclusive start date (YYYY-MM-DD, Lagos)
+     * @param {string|null} [to] - Inclusive end date (YYYY-MM-DD, Lagos)
+     * @returns {object|null} MongoDB date-range filter or null if no dates provided
+     */
+    _buildDateRangeFilter(from, to) {
+        if (!from && !to) {
+            return null;
+        }
+
+        const filter = {};
+
+        if (from) {
+            this._validateLagosDate(from, "from");
+            filter.$gte = this._lagosDateToUTC(from);
+        }
+
+        if (to) {
+            this._validateLagosDate(to, "to");
+            // Exclusive upper bound: Lagos midnight of the day after `to`
+            const [year, month, day] = to.split("-").map(Number);
+            const nextDay = new Date(Date.UTC(year, month - 1, day));
+            nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+            const nextDayStr = `${nextDay.getUTCFullYear()}-${String(nextDay.getUTCMonth() + 1).padStart(2, '0')}-${String(nextDay.getUTCDate()).padStart(2, '0')}`;
+            filter.$lt = this._lagosDateToUTC(nextDayStr);
+        }
+
+        // Validate from > to
+        if (from && to) {
+            const fromUTC = this._lagosDateToUTC(from);
+            const [year, month, day] = to.split("-").map(Number);
+            const nextDay = new Date(Date.UTC(year, month - 1, day));
+            nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+            const nextDayStr = `${nextDay.getUTCFullYear()}-${String(nextDay.getUTCMonth() + 1).padStart(2, '0')}-${String(nextDay.getUTCDate()).padStart(2, '0')}`;
+            const toExclusive = this._lagosDateToUTC(nextDayStr);
+
+            if (fromUTC >= toExclusive) {
+                throw new ApiError(400, "Invalid date range: from date must be before to date.");
+            }
+        }
+
+        return filter;
+    }
+
+    /**
+     * Get earnings by consultant ID with optional pagination.
+     *
      * @param {string} consultantId - The consultant ID
      * @param {string} [status] - Optional status filter
+     * @param {string} [from] - Optional inclusive start date (YYYY-MM-DD, Lagos)
+     * @param {string} [to] - Optional inclusive end date (YYYY-MM-DD, Lagos)
+     * @param {number} [page] - Optional page number (1-based)
+     * @param {number} [limit] - Optional page size
      * @param {string} [userRole] - Optional requester role for serialization
-     * @returns {Promise<Array>} Array of earnings (serialized if userRole provided)
+     * @returns {Promise<object>} Paginated result with earnings array and pagination metadata
      */
-    async getEarningsByConsultantId(consultantId, status = null, userRole = null) {
+    async getEarningsByConsultantId(consultantId, status = null, from = null, to = null, page = 1, limit = 10, userRole = null) {
         const query = { consultantId };
 
         if (status) {
             query.status = status;
         }
 
-        const earnings = await ConsultantEarning.find(query).sort({ createdAt: -1 });
-
-        if (userRole) {
-            return this.serializeManyForRole(earnings, userRole);
+        // Apply Lagos timezone date-range filter
+        const dateRangeFilter = this._buildDateRangeFilter(from, to);
+        if (dateRangeFilter) {
+            query.createdAt = dateRangeFilter;
         }
 
-        return earnings;
+        // Pagination defaults and bounds
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.min(50, Math.max(1, parseInt(limit, 10) || 10));
+        const skip = (pageNum - 1) * limitNum;
+
+        // Stable sort: createdAt descending, then _id descending as tiebreaker
+        const sort = { createdAt: -1, _id: -1 };
+
+        // Fetch page and total count in parallel
+        const [earnings, total] = await Promise.all([
+            ConsultantEarning.find(query).sort(sort).skip(skip).limit(limitNum),
+            ConsultantEarning.countDocuments(query),
+        ]);
+
+        const pages = total > 0 ? Math.ceil(total / limitNum) : 0;
+
+        const result = {
+            earnings,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total,
+                pages,
+            },
+        };
+
+        if (userRole) {
+            result.earnings = this.serializeManyForRole(earnings, userRole);
+        }
+
+        return result;
+    }
+
+    // -----------------------------------------------------------------------
+    // Export
+    // -----------------------------------------------------------------------
+
+    /**
+     * Format a Date or ISO string as a human-readable date in Lagos timezone.
+     * Example: "Sep 15, 2026"
+     * @param {Date|string|null} date - The date to format
+     * @returns {string} Formatted date string or empty string if null/undefined
+     */
+    _formatDateForExport(date) {
+        if (!date) return "";
+        const d = date instanceof Date ? date : new Date(date);
+        if (isNaN(d.getTime())) return "";
+        return d.toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+            timeZone: APP_TIMEZONE,
+        });
+    }
+
+    /**
+     * Format an amount in kobo as Nigerian naira string.
+     * Example: 500000 -> "5,000.00"
+     * @param {number} kobo - Amount in kobo
+     * @returns {string} Formatted naira string
+     */
+    _formatKoboToNaira(kobo) {
+        if (typeof kobo !== "number" || isNaN(kobo)) return "0.00";
+        const naira = kobo / 100;
+        return naira.toLocaleString("en-NG", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        });
+    }
+
+    /**
+     * Escape a value for safe CSV output.
+     * Handles commas, quotes, newlines, and formula injection.
+     *
+     * @param {string|null|undefined} value - The value to escape
+     * @returns {string} Safely escaped CSV cell value
+     */
+    _escapeCsvValue(value) {
+        if (value === null || value === undefined) return "";
+
+        const str = String(value);
+
+        // Prevent spreadsheet formula injection
+        const formulaPrefixes = ["=", "+", "-", "@"];
+        const firstChar = str.charAt(0);
+        if (formulaPrefixes.includes(firstChar)) {
+            return `'${str}`;
+        }
+
+        // If the value contains comma, quote, or newline, wrap in quotes
+        // and double any internal quotes
+        if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+            return `"${str.replace(/"/g, '""')}"`;
+        }
+
+        return str;
+    }
+
+    /**
+     * Generate a CSV string from an array of serialized consultant earnings.
+     *
+     * @param {Array} earnings - Array of serialized consultant earnings
+     * @returns {string} CSV string with BOM
+     */
+    _generateCsv(earnings) {
+        const headers = [
+            "ID",
+            "Date",
+            "Status",
+            "Session Outcome",
+            "Amount (₦)",
+            "Eligible At",
+            "Paid At",
+        ];
+
+        const rows = earnings.map((e) => {
+            return [
+                this._escapeCsvValue(e._id),
+                this._escapeCsvValue(this._formatDateForExport(e.createdAt)),
+                this._escapeCsvValue(e.status),
+                this._escapeCsvValue(e.sessionOutcome),
+                this._escapeCsvValue(this._formatKoboToNaira(e.consultantEntitlement)),
+                this._escapeCsvValue(this._formatDateForExport(e.eligibleAt)),
+                this._escapeCsvValue(this._formatDateForExport(e.paidAt)),
+            ].join(",");
+        });
+
+        const csvContent = [headers.join(","), ...rows].join("\n");
+        // Add UTF-8 BOM for Excel compatibility
+        return "\uFEFF" + csvContent;
+    }
+
+    /**
+     * Export all earnings for a consultant matching the given filters.
+     * Returns a CSV string with consultant-safe fields only.
+     *
+     * @param {string} consultantId - The consultant ID
+     * @param {object} filters - Export filters
+     * @param {string} [filters.status] - Optional status filter
+     * @param {string} [filters.from] - Optional inclusive start date (YYYY-MM-DD, Lagos)
+     * @param {string} [filters.to] - Optional inclusive end date (YYYY-MM-DD, Lagos)
+     * @returns {Promise<string>} CSV string with BOM
+     */
+    async exportEarningsByConsultantId(consultantId, { status = null, from = null, to = null } = {}) {
+        const query = { consultantId };
+
+        if (status) {
+            query.status = status;
+        }
+
+        // Apply Lagos timezone date-range filter (reuses existing logic)
+        const dateRangeFilter = this._buildDateRangeFilter(from, to);
+        if (dateRangeFilter) {
+            query.createdAt = dateRangeFilter;
+        }
+
+        // Fetch ALL matching records (no pagination, no limit)
+        const sort = { createdAt: -1, _id: -1 };
+        const earnings = await ConsultantEarning.find(query).sort(sort);
+
+        // Serialize for consultant role (enforces privacy allowlist)
+        const serialized = this.serializeManyForRole(earnings, USER_ROLES.CONSULTANT);
+
+        // Generate CSV
+        return this._generateCsv(serialized);
     }
 
     /**

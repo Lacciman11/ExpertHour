@@ -4,6 +4,7 @@ import Payout from "../models/Payout.js";
 import ConsultantEarning from "../models/ConsultantEarning.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
 import ApiError from "../utils/ApiError.js";
+import paymentLogger from "../utils/logger.js";
 import {
     EARNING_STATUS,
     PAYOUT_STATUS,
@@ -293,8 +294,8 @@ class PayoutService {
 
                 // 6. Update earnings to IN_PAYOUT status
                 const earningIds = eligibleEarnings.map(e => e._id);
-                await ConsultantEarning.updateMany(
-                    { _id: { $in: earningIds } },
+                const updateResult = await ConsultantEarning.updateMany(
+                    { _id: { $in: earningIds }, status: EARNING_STATUS.ELIGIBLE },
                     {
                         $set: {
                             status: EARNING_STATUS.IN_PAYOUT,
@@ -311,6 +312,17 @@ class PayoutService {
                     },
                     { session: mongoSession }
                 );
+
+                // Verify all eligible earnings were claimed. If a refund changed
+                // an earning's status during this transaction, the conditional
+                // filter above would skip it. Roll back rather than create a
+                // payout with stale earningIds or totals.
+                if (updateResult.modifiedCount !== eligibleEarnings.length) {
+                    throw new ApiError(
+                        409,
+                        `Payout race: expected to claim ${eligibleEarnings.length} earnings, but only ${updateResult.modifiedCount} were still ELIGIBLE`
+                    );
+                }
 
                 return { payout, created: true, duplicate: false };
             });
@@ -666,8 +678,12 @@ class PayoutService {
                 await payout.save({ session: mongoSession });
 
                 // Update all included earnings to PAID
-                await ConsultantEarning.updateMany(
-                    { _id: { $in: payout.earningIds } },
+                const completedResult = await ConsultantEarning.updateMany(
+                    {
+                        _id: { $in: payout.earningIds },
+                        status: EARNING_STATUS.IN_PAYOUT,
+                        payoutId: payout._id,
+                    },
                     {
                         $set: {
                             status: EARNING_STATUS.PAID,
@@ -684,6 +700,14 @@ class PayoutService {
                     },
                     { session: mongoSession }
                 );
+
+                if (completedResult.modifiedCount !== payout.earningIds.length) {
+                    paymentLogger.warn("payout_completion_partial", {
+                        payoutId: payout._id.toString(),
+                        expected: payout.earningIds.length,
+                        modified: completedResult.modifiedCount,
+                    });
+                }
 
                 return payout;
             });
@@ -721,8 +745,12 @@ class PayoutService {
                 await payout.save({ session: mongoSession });
 
                 // Revert earnings back to ELIGIBLE for retry
-                await ConsultantEarning.updateMany(
-                    { _id: { $in: payout.earningIds } },
+                const failedResult = await ConsultantEarning.updateMany(
+                    {
+                        _id: { $in: payout.earningIds },
+                        status: EARNING_STATUS.IN_PAYOUT,
+                        payoutId: payout._id,
+                    },
                     {
                         $set: {
                             status: EARNING_STATUS.ELIGIBLE,
@@ -739,6 +767,14 @@ class PayoutService {
                     },
                     { session: mongoSession }
                 );
+
+                if (failedResult.modifiedCount !== payout.earningIds.length) {
+                    paymentLogger.warn("payout_failure_partial", {
+                        payoutId: payout._id.toString(),
+                        expected: payout.earningIds.length,
+                        modified: failedResult.modifiedCount,
+                    });
+                }
 
                 return payout;
             });

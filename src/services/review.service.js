@@ -3,6 +3,9 @@ import mongoose from "mongoose";
 import Review from "../models/Review.js";
 import Booking from "../models/Booking.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
+import ConsultationSession from "../models/ConsultationSession.js";
+
+import { SESSION_OUTCOME } from "../utils/constants.js";
 
 class ReviewService {
 
@@ -24,9 +27,14 @@ class ReviewService {
 
         }
 
-        if (booking.status !== "completed") {
+        // Review eligibility is based on the actual consultation outcome,
+        // not Booking.status. The outcome worker finalizes the session result
+        // independently of the booking lifecycle state.
+        const session = await ConsultationSession.findOne({ bookingId }).select("outcome");
 
-            throw new Error("Can only review completed bookings");
+        if (!session || session.outcome !== SESSION_OUTCOME.COMPLETED) {
+
+            throw new Error("Can only review completed sessions");
 
         }
 

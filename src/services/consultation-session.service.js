@@ -1,8 +1,10 @@
 import ConsultationSession from "../models/ConsultationSession.js";
 import Booking from "../models/Booking.js";
+import Payment from "../models/Payment.js";
 import ApiError from "../utils/ApiError.js";
 import {
     APP_TIMEZONE_UTC_OFFSET,
+    BOOKING_STATUS,
 } from "../utils/constants.js";
 
 // ---------------------------------------------------------------------------
@@ -235,6 +237,48 @@ export function computeAttendanceQualification(session, asOf = null) {
 class ConsultationSessionService {
 
     // -----------------------------------------------------------------------
+    // Private helpers
+    // -----------------------------------------------------------------------
+
+    /**
+     * Assert that a booking is eligible for consultation-session access.
+     *
+     * Eligibility rules:
+     *   1. Booking must not be cancelled.
+     *   2. Booking must have a paymentReference.
+     *   3. The referenced Payment must exist and have status === "success".
+     *
+     * This is the single source of truth for session authorization.
+     * Do not bypass this helper or re-implement the checks inline.
+     */
+    async _assertBookingEligibleForSession(booking) {
+        if (booking.status === BOOKING_STATUS.CANCELLED) {
+            throw new ApiError(403, "Cannot access session for a cancelled booking");
+        }
+        if (!booking.paymentReference || booking.paymentReference.length === 0) {
+            throw new ApiError(403, "Session access requires successful payment");
+        }
+        const payment = await Payment.findOne({ reference: booking.paymentReference });
+        if (!payment || payment.status !== "success") {
+            throw new ApiError(403, "Session access requires successful payment");
+        }
+    }
+
+    /**
+     * Assert that a ConsultationSession has not yet reached a terminal
+     * outcome. Once `outcome` and `outcomeFinalizedAt` are both set, the
+     * session is immutable from the participant-facing mutation methods.
+     */
+    _assertSessionNotTerminal(session) {
+        if (!session) {
+            throw new ApiError(404, "Session not found");
+        }
+        if (session.outcome !== null && session.outcomeFinalizedAt !== null) {
+            throw new ApiError(409, "Session outcome has already been finalized");
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Session creation / update (participant-controlled fields only)
     // -----------------------------------------------------------------------
 
@@ -268,6 +312,8 @@ class ConsultationSessionService {
             throw new ApiError(403, "Not authorized to update this session");
         }
 
+        await this._assertBookingEligibleForSession(booking);
+
         let session = await ConsultationSession.findOne({ bookingId });
 
         if (!session) {
@@ -289,6 +335,8 @@ class ConsultationSessionService {
                 }
             }
         } else {
+            this._assertSessionNotTerminal(session);
+
             // Backfill scheduled window if missing (e.g., sessions created
             // by older code paths before this task). Do NOT overwrite an
             // already-populated window — the booking's wall-clock time is
@@ -321,6 +369,8 @@ class ConsultationSessionService {
         if (!isConsultant && !isClient) {
             throw new ApiError(403, "Not authorized to view this session");
         }
+
+        await this._assertBookingEligibleForSession(booking);
 
         const session = await ConsultationSession.findOne({ bookingId });
         return session;
@@ -370,6 +420,8 @@ class ConsultationSessionService {
             throw new ApiError(403, "Not authorized to record attendance");
         }
 
+        await this._assertBookingEligibleForSession(booking);
+
         const participant = isConsultant ? "consultant" : "client";
 
         // Ensure the session exists with scheduled window populated.
@@ -399,6 +451,7 @@ class ConsultationSessionService {
         if (!session) {
             throw new ApiError(500, "Failed to materialize ConsultationSession");
         }
+        this._assertSessionNotTerminal(session);
         if (!session.scheduledStart || !session.scheduledEnd) {
             // Backfill scheduled window for legacy sessions.
             const win = calculateScheduledWindow(booking);
@@ -562,6 +615,8 @@ class ConsultationSessionService {
         if (!session) {
             throw new ApiError(404, "Session not found");
         }
+
+        this._assertSessionNotTerminal(session);
 
         session.recordingUrl = recordingUrl;
         await session.save();

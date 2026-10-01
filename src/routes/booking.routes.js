@@ -9,6 +9,7 @@ import {
     confirmBooking,
     completeBooking,
     getConsultantStats,
+    getClientStats,
     getAllBookings,
     getPendingRequests,
     getConsultantUpcomingSessions,
@@ -63,6 +64,11 @@ router.get(
 router.get(
     "/upcoming",
     getUpcomingBookings
+);
+
+router.get(
+    "/client/stats",
+    getClientStats
 );
 
 router.get(

@@ -3,6 +3,7 @@ import { Router } from "express";
 import {
     getMyEarnings,
     getMyEarningById,
+    exportMyEarnings,
     getAllEarnings,
     getEarningById,
 } from "../controllers/consultant-earning.controller.js";
@@ -36,6 +37,12 @@ router.get(
     "/:id",
     authorize("CONSULTANT"),
     getMyEarningById
+);
+
+router.get(
+    "/export",
+    authorize("CONSULTANT"),
+    exportMyEarnings
 );
 
 /*

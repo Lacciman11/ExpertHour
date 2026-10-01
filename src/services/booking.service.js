@@ -5,8 +5,11 @@ import User from "../models/User.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
 import ConsultationSession from "../models/ConsultationSession.js";
 import Payment from "../models/Payment.js";
+import ConsultantEarning from "../models/ConsultantEarning.js";
 import consultantEarningService from "./consultant-earning.service.js";
 import googleCalendarService from "./google-calendar.service.js";
+
+import { SESSION_OUTCOME, EARNING_STATUS } from "../utils/constants.js";
 
 import {
     BOOKING_STATUS,
@@ -14,6 +17,7 @@ import {
     APP_TIMEZONE,
     APP_TIMEZONE_UTC_OFFSET,
     CANCELLATION_WINDOW_MS,
+    SLOT_GRANULARITY_MINUTES,
 } from "../utils/constants.js";
 import { koboToNaira } from "../utils/currency.js";
 import ApiError from "../utils/ApiError.js";
@@ -21,8 +25,9 @@ import ApiError from "../utils/ApiError.js";
 /**
  * Slot granularity in minutes.
  * Each booking claims one or more slot locks of this duration.
+ * Imported from shared constants to ensure consistency with the
+ * available-slots endpoint.
  */
-const SLOT_GRANULARITY_MINUTES = 30;
 
 class BookingService {
 
@@ -50,7 +55,28 @@ class BookingService {
         const profile = await ConsultantProfile.findById(consultantProfileId);
 
         if (!profile || !profile.isActive) {
-            throw new Error("Consultant profile not found or inactive");
+            throw new ApiError(
+                400,
+                "Consultant profile not found or inactive"
+            );
+        }
+
+        // --- Status validation ---
+        // Only approved, active consultants with availability !== UNAVAILABLE
+        // may receive new bookings. BUSY remains bookable because the consultant
+        // may still have future availability slots.
+        if (profile.approvalStatus !== "approved") {
+            throw new ApiError(
+                400,
+                "Consultant profile is not approved for bookings"
+            );
+        }
+
+        if (profile.availability === "UNAVAILABLE") {
+            throw new ApiError(
+                400,
+                "Consultant is currently unavailable"
+            );
         }
 
         // --- Currency enforcement ---
@@ -100,6 +126,18 @@ class BookingService {
         if (!isWithinAvailability) {
             throw new Error(
                 "Selected time is outside consultant's available hours"
+            );
+        }
+
+        // --- Past time check ---
+        // Reject bookings whose start time is already in the past (or exactly now).
+        // Uses the application's Africa/Lagos timezone via _getSessionStartTime.
+        const now = this._getCurrentTime();
+        const sessionStart = this._getSessionStartTime(date, time);
+        if (sessionStart <= now) {
+            throw new ApiError(
+                400,
+                "Booking start time must be in the future"
             );
         }
 
@@ -266,7 +304,7 @@ class BookingService {
 
         booking.amount = koboToNaira(booking.amount);
 
-        return booking;
+        return this._enrichWithSessionOutcome(booking);
     }
 
     async findClientBookings(clientId, filters = {}) {
@@ -294,8 +332,10 @@ class BookingService {
 
         const total = await Booking.countDocuments(query);
 
+        const enrichedBookings = await this._enrichWithSessionOutcome(bookings);
+
         return {
-            bookings,
+            bookings: enrichedBookings,
             total,
             page,
             limit,
@@ -328,8 +368,10 @@ class BookingService {
 
         const total = await Booking.countDocuments(query);
 
+        const enrichedBookings = await this._enrichWithSessionOutcome(bookings);
+
         return {
-            bookings,
+            bookings: enrichedBookings,
             total,
             page,
             limit,
@@ -338,25 +380,29 @@ class BookingService {
     }
 
     async findUpcomingBookings(clientId) {
-        const now = new Date();
-        const today = now.toISOString().split("T")[0];
+        const now = this._getCurrentTime();
 
         const bookings = await Booking.find({
             clientId,
             status: { $in: [BOOKING_STATUS.PENDING, BOOKING_STATUS.CONFIRMED] },
-            date: { $gte: today },
         })
             .populate("consultantId", "firstName lastName")
             .populate("consultantProfileId", "hourlyRate skills")
-            .sort({ date: 1, time: 1 })
-            .limit(5);
+            .sort({ date: 1, time: 1 });
+
+        const upcomingBookings = bookings.filter((booking) => {
+            const sessionStart = this._getSessionStartTime(booking.date, booking.time);
+            return sessionStart > now;
+        }).slice(0, 5);
 
         // Convert kobo to Naira for API response
-        bookings.forEach(booking => {
+        upcomingBookings.forEach(booking => {
             booking.amount = koboToNaira(booking.amount);
         });
 
-        return bookings;
+        const enrichedBookings = await this._enrichWithSessionOutcome(upcomingBookings);
+
+        return enrichedBookings;
     }
 
     async updateStatus(id, status) {
@@ -602,6 +648,48 @@ class BookingService {
     }
 
     /**
+     * Enrich bookings with their ConsultationSession outcome.
+     *
+     * Queries ConsultationSession for all provided booking IDs and attaches
+     * `sessionOutcome` to each booking. If no session exists, `sessionOutcome`
+     * is set to null.
+     *
+     * Only exposes the outcome field — no other session data is leaked.
+     *
+     * @param {Array|Object} bookings - Array of booking documents or a single booking
+     * @returns {Array|Object} Enriched bookings with sessionOutcome field
+     */
+    async _enrichWithSessionOutcome(bookings) {
+        const isSingle = !Array.isArray(bookings);
+        const bookingList = isSingle ? [bookings] : bookings;
+
+        if (bookingList.length === 0) {
+            return isSingle ? bookings : bookings;
+        }
+
+        const bookingIds = bookingList.map(b => b._id);
+
+        const sessions = await ConsultationSession.find({
+            bookingId: { $in: bookingIds },
+        }).select("bookingId outcome");
+
+        const outcomeMap = new Map();
+        for (const session of sessions) {
+            outcomeMap.set(session.bookingId.toString(), session.outcome);
+        }
+
+        const enriched = bookingList.map(booking => {
+            const outcome = outcomeMap.get(booking._id.toString()) ?? null;
+            return {
+                ...booking.toObject ? booking.toObject() : booking,
+                sessionOutcome: outcome,
+            };
+        });
+
+        return isSingle ? enriched[0] : enriched;
+    }
+
+    /**
      * Calculate session start time from date and time strings.
      * @param {string} date - Date string (YYYY-MM-DD)
      * @param {string} time - Time string (HH:MM)
@@ -788,8 +876,10 @@ class BookingService {
 
         const total = await Booking.countDocuments(query);
 
+        const enrichedBookings = await this._enrichWithSessionOutcome(bookings);
+
         return {
-            bookings,
+            bookings: enrichedBookings,
             total,
             page,
             limit,
@@ -798,7 +888,10 @@ class BookingService {
     }
 
     async getStats(consultantId) {
-        const totalBookings = await Booking.countDocuments({ consultantId });
+        const totalBookings = await Booking.countDocuments({
+            consultantId,
+            status: { $ne: BOOKING_STATUS.CANCELLED },
+        });
         const pendingBookings = await Booking.countDocuments({
             consultantId,
             status: BOOKING_STATUS.PENDING,
@@ -945,6 +1038,233 @@ class BookingService {
         await consultantEarningService.cancelEarningForBooking(booking._id);
 
         return booking;
+    }
+
+    /**
+     * Get client-specific dashboard statistics.
+     *
+     * Calculates:
+     *   - sessionsBooked: total count of all bookings for the client
+     *     (complete history, not limited to a page, all statuses)
+     *   - completedBookings: total count of completed bookings for the client
+     *   - expertsConsulted: count of distinct consultants from the client's
+     *     completed bookings (complete history, not limited to a page)
+     *   - totalSpent: sum of (Payment.amount - Payment.refundAmount) for all
+     *     successful payments linked to the client's completed bookings
+     *
+     * Financial convention:
+     *   All monetary values are in kobo (smallest NGN unit).
+     *   Refunds are subtracted from the payment amount.
+     *   Failed/abandoned/pending payments contribute nothing.
+     *
+     * @param {string} clientId - Authenticated client's user ID
+     * @returns {Object} { sessionsBooked, completedBookings, expertsConsulted, totalSpent }
+     */
+    async getClientStats(clientId) {
+        const sessionsBooked = await Booking.countDocuments({
+            clientId: new mongoose.Types.ObjectId(clientId),
+        });
+
+        const completedBookings = await Booking.countDocuments({
+            clientId: new mongoose.Types.ObjectId(clientId),
+            status: BOOKING_STATUS.COMPLETED,
+        });
+
+        const expertsConsulted = await Booking.distinct("consultantId", {
+            clientId: new mongoose.Types.ObjectId(clientId),
+            status: BOOKING_STATUS.COMPLETED,
+        }).then(ids => ids.length);
+
+        const revenueResult = await Payment.aggregate([
+            {
+                $match: {
+                    clientId: new mongoose.Types.ObjectId(clientId),
+                    status: "success",
+                },
+            },
+            {
+                $lookup: {
+                    from: "bookings",
+                    localField: "bookingId",
+                    foreignField: "_id",
+                    as: "booking",
+                },
+            },
+            {
+                $unwind: "$booking",
+            },
+            {
+                $match: {
+                    "booking.status": BOOKING_STATUS.COMPLETED,
+                },
+            },
+            {
+                $group: {
+                    _id: null,
+                    totalSpent: { $sum: { $subtract: ["$amount", "$refundAmount"] } },
+                },
+            },
+        ]);
+
+        const totalSpent = revenueResult.length > 0 ? revenueResult[0].totalSpent : 0;
+
+        return {
+            sessionsBooked,
+            completedBookings,
+            expertsConsulted,
+            totalSpent,
+        };
+    }
+
+    /**
+     * Get pending booking requests for a consultant.
+     *
+     * @param {string} consultantId - Authenticated consultant's user ID
+     * @returns {Array} Array of pending bookings enriched with session outcome
+     */
+    async getPendingRequests(consultantId) {
+        const bookings = await Booking.find({
+            consultantId,
+            status: BOOKING_STATUS.PENDING,
+        })
+            .populate("clientId", "firstName lastName")
+            .populate("consultantProfileId", "hourlyRate skills")
+            .sort({ createdAt: -1 });
+
+        // Convert kobo to Naira for API response
+        bookings.forEach(booking => {
+            booking.amount = koboToNaira(booking.amount);
+        });
+
+        const enrichedBookings = await this._enrichWithSessionOutcome(bookings);
+
+        return enrichedBookings;
+    }
+
+    /**
+     * Get upcoming sessions for a consultant.
+     *
+     * Reuses the project's existing Lagos timezone session-start helpers
+     * and session-outcome enrichment. Does not invent a second timezone
+     * implementation.
+     *
+     * @param {string} consultantId - Authenticated consultant's user ID
+     * @returns {Array} Array of upcoming bookings (max 5), sorted chronologically
+     */
+    async getConsultantUpcomingSessions(consultantId) {
+        const now = this._getCurrentTime();
+
+        const bookings = await Booking.find({
+            consultantId,
+            status: { $in: [BOOKING_STATUS.PENDING, BOOKING_STATUS.CONFIRMED] },
+        })
+            .populate("clientId", "firstName lastName")
+            .populate("consultantProfileId", "hourlyRate skills")
+            .sort({ date: 1, time: 1 });
+
+        const upcomingBookings = bookings.filter((booking) => {
+            const sessionStart = this._getSessionStartTime(booking.date, booking.time);
+            return sessionStart > now;
+        }).slice(0, 5);
+
+        // Convert kobo to Naira for API response
+        upcomingBookings.forEach(booking => {
+            booking.amount = koboToNaira(booking.amount);
+        });
+
+        const enrichedBookings = await this._enrichWithSessionOutcome(upcomingBookings);
+
+        return enrichedBookings;
+    }
+
+    /**
+     * Get earnings summary for a consultant.
+     *
+     * Uses the existing ConsultantEarning ledger as the authoritative source.
+     * Does not calculate earnings from Booking.amount or Payment.amount.
+     *
+     * Only includes earnings whose status represents actual consultant entitlement:
+     * PENDING, ELIGIBLE, IN_PAYOUT, PAID, and ADJUSTED.
+     * Excludes CANCELLED and HELD earnings (no entitlement or under investigation).
+     *
+     * For ADJUSTED earnings, uses adjustedConsultantEntitlement; otherwise
+     * uses consultantEntitlement.
+     *
+     * @param {string} consultantId - Authenticated consultant's user ID
+     * @returns {Object} { thisWeek, thisMonth, total } in Naira
+     */
+    async getEarningsSummary(consultantId) {
+        // --- Lagos timezone boundary calculation ---
+        // Nigeria (Africa/Lagos) is permanently UTC+1 with no DST.
+        // All business-day boundaries (week, month) are computed from Lagos
+        // wall-clock time, not server-local time, so the summary is consistent
+        // regardless of where the server runs.
+        const formatter = new Intl.DateTimeFormat("en-US", {
+            timeZone: APP_TIMEZONE,
+            year: "numeric",
+            month: "numeric",
+            day: "numeric",
+            hour: "numeric",
+            minute: "numeric",
+            second: "numeric",
+            hour12: false,
+        });
+
+        const parts = formatter.formatToParts(new Date());
+        const getPart = (type) => parts.find((p) => p.type === type)?.value;
+
+        const lagosYear = parseInt(getPart("year"), 10);
+        const lagosMonth = parseInt(getPart("month"), 10); // 1-based
+        const lagosDay = parseInt(getPart("day"), 10);
+        const lagosHour = parseInt(getPart("hour"), 10);
+        const lagosMinute = parseInt(getPart("minute"), 10);
+        const lagosSecond = parseInt(getPart("second"), 10);
+
+        // Current moment in Lagos as a UTC Date (for day-of-week calculation)
+        const lagosNowUTC = new Date(
+            Date.UTC(lagosYear, lagosMonth - 1, lagosDay, lagosHour, lagosMinute, lagosSecond)
+        );
+        const lagosDayOfWeek = lagosNowUTC.getUTCDay(); // 0=Sunday
+
+        // Week boundary: Sunday 00:00:00 Lagos time
+        const startOfWeekLagos = new Date(lagosNowUTC);
+        startOfWeekLagos.setUTCDate(lagosNowUTC.getUTCDate() - lagosDayOfWeek);
+        startOfWeekLagos.setUTCHours(0, 0, 0, 0);
+
+        // Month boundary: Day 1, 00:00:00 Lagos time
+        const startOfMonthLagos = new Date(Date.UTC(lagosYear, lagosMonth - 1, 1, 0, 0, 0));
+
+        // Query active earnings from the ledger.
+        // Exclude CANCELLED (bad session outcome, zero entitlement) and
+        // HELD (under investigation, not yet eligible).
+        const earnings = await ConsultantEarning.find({
+            consultantId: new mongoose.Types.ObjectId(consultantId),
+            status: {
+                $nin: [EARNING_STATUS.CANCELLED, EARNING_STATUS.HELD],
+            },
+        });
+
+        let thisWeek = 0;
+        let thisMonth = 0;
+        let total = 0;
+
+        for (const earning of earnings) {
+            // Use adjusted entitlement if the earning was adjusted;
+            // otherwise use the original consultant entitlement.
+            const amountKobo = earning.adjustedConsultantEntitlement ?? earning.consultantEntitlement;
+            const amountNaira = koboToNaira(amountKobo);
+
+            total += amountNaira;
+
+            if (earning.createdAt >= startOfWeekLagos) {
+                thisWeek += amountNaira;
+            }
+            if (earning.createdAt >= startOfMonthLagos) {
+                thisMonth += amountNaira;
+            }
+        }
+
+        return { thisWeek, thisMonth, total };
     }
 }
 

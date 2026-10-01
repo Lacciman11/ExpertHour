@@ -145,6 +145,20 @@ export const getConsultantStats = asyncHandler(async (req, res) => {
 
 });
 
+export const getClientStats = asyncHandler(async (req, res) => {
+
+    const stats = await bookingService.getClientStats(req.user._id);
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            stats,
+            "Client stats fetched successfully"
+        )
+    );
+
+});
+
 export const getAllBookings = asyncHandler(async (req, res) => {
 
     const { status, page, limit } = req.query;

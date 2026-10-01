@@ -28,8 +28,14 @@ export const createBookingValidator = [
     body("duration")
         .notEmpty()
         .withMessage("Duration is required")
-        .isInt({ min: 1 })
-        .withMessage("Duration must be at least 1 hour"),
+        .isInt({ min: 30 })
+        .withMessage("Duration must be at least 30 minutes")
+        .custom((value) => {
+            if (value % 30 !== 0) {
+                throw new Error("Duration must be a multiple of 30 minutes");
+            }
+            return true;
+        }),
 
     body("amount")
         .notEmpty()

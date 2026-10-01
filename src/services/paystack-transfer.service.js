@@ -82,6 +82,37 @@ async function createTransferRecipient({ name, accountNumber, bankCode, currency
 }
 
 /**
+ * Fetch the list of banks from Paystack.
+ *
+ * @returns {Promise<Array>} Normalized bank list
+ */
+async function getBanks() {
+    let response;
+    try {
+        response = await paystackClient.request("GET", "/bank");
+    } catch (error) {
+        paymentLogger.error("paystack_bank_list_failed", {
+            event: "paystack_bank_list_failed",
+            error: error.message,
+        });
+        throw new ApiError(500, "Failed to fetch bank list");
+    }
+
+    const data = response.data?.data;
+    if (!data || !Array.isArray(data)) {
+        throw new ApiError(500, "Paystack response missing bank list");
+    }
+
+    return data
+        .filter((bank) => bank.active)
+        .map((bank) => ({
+            name: bank.name,
+            code: bank.code,
+            active: bank.active,
+        }));
+}
+
+/**
  * Resolve a bank account via Paystack.
  *
  * @param {object} params
@@ -198,9 +229,10 @@ async function checkTransferStatus(identifier) {
 // Export
 // ---------------------------------------------------------------------------
 
-export { createTransferRecipient, resolveBankAccount, initiateTransfer, checkTransferStatus };
+export { getBanks, createTransferRecipient, resolveBankAccount, initiateTransfer, checkTransferStatus };
 
 export default {
+    getBanks,
     createTransferRecipient,
     resolveBankAccount,
     initiateTransfer,

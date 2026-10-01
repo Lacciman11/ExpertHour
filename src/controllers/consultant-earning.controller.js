@@ -36,22 +36,126 @@ function validateObjectId(id) {
  */
 export const getMyEarnings = asyncHandler(async (req, res) => {
 
-    const { status } = req.query;
+    const { status, from, to, page, limit } = req.query;
 
-    const earnings = await consultantEarningService.getEarningsByConsultantId(
+    // Validate date parameters if provided
+    if (from) {
+        consultantEarningService._validateLagosDate(from, "from");
+    }
+    if (to) {
+        consultantEarningService._validateLagosDate(to, "to");
+    }
+
+    // Validate from > to
+    if (from && to) {
+        const fromUTC = consultantEarningService._lagosDateToUTC(from);
+        const [year, month, day] = to.split("-").map(Number);
+        const nextDay = new Date(Date.UTC(year, month - 1, day));
+        nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+        const nextDayStr = `${nextDay.getUTCFullYear()}-${String(nextDay.getUTCMonth() + 1).padStart(2, '0')}-${String(nextDay.getUTCDate()).padStart(2, '0')}`;
+        const toExclusive = consultantEarningService._lagosDateToUTC(nextDayStr);
+
+        if (fromUTC >= toExclusive) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid date range: from date must be before to date.",
+            });
+        }
+    }
+
+    // Validate pagination parameters
+    const pageNum = page !== undefined ? parseInt(page, 10) : 1;
+    const limitNum = limit !== undefined ? parseInt(limit, 10) : 10;
+
+    if (isNaN(pageNum) || pageNum < 1) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid page: must be a positive integer.",
+        });
+    }
+
+    if (isNaN(limitNum) || limitNum < 1) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid limit: must be a positive integer.",
+        });
+    }
+
+    if (limitNum > 50) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid limit: maximum allowed is 50.",
+        });
+    }
+
+    const result = await consultantEarningService.getEarningsByConsultantId(
         req.user._id,
         status || null,
+        from || null,
+        to || null,
+        pageNum,
+        limitNum,
         USER_ROLES.CONSULTANT
     );
 
     return res.status(200).json(
         new ApiResponse(
             200,
-            earnings,
+            result,
             "Earnings fetched successfully"
         )
     );
 
+});
+
+/**
+ * Export all earnings for the authenticated consultant as CSV.
+ * Consultants can only export their own earnings.
+ * Response is filtered by role (privacy).
+ */
+export const exportMyEarnings = asyncHandler(async (req, res) => {
+    const { status, from, to } = req.query;
+
+    // Validate date parameters if provided
+    if (from) {
+        consultantEarningService._validateLagosDate(from, "from");
+    }
+    if (to) {
+        consultantEarningService._validateLagosDate(to, "to");
+    }
+
+    // Validate from > to
+    if (from && to) {
+        const fromUTC = consultantEarningService._lagosDateToUTC(from);
+        const [year, month, day] = to.split("-").map(Number);
+        const nextDay = new Date(Date.UTC(year, month - 1, day));
+        nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+        const nextDayStr = `${nextDay.getUTCFullYear()}-${String(nextDay.getUTCMonth() + 1).padStart(2, '0')}-${String(nextDay.getUTCDate()).padStart(2, '0')}`;
+        const toExclusive = consultantEarningService._lagosDateToUTC(nextDayStr);
+
+        if (fromUTC >= toExclusive) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid date range: from date must be before to date.",
+            });
+        }
+    }
+
+    const csv = await consultantEarningService.exportEarningsByConsultantId(
+        req.user._id,
+        {
+            status: status || null,
+            from: from || null,
+            to: to || null,
+        }
+    );
+
+    const today = new Date();
+    const filename = `earnings-export-${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}.csv`;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(csv);
 });
 
 /**

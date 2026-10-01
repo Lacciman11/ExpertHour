@@ -62,6 +62,10 @@ const consultantProfileSchema = new mongoose.Schema(
             type: Number,
             required: [true, "Hourly rate is required"],
             min: [0, "Hourly rate cannot be negative"],
+            validate: {
+                validator: (v) => Number.isFinite(v),
+                message: "Hourly rate must be a finite number",
+            },
         },
 
         /**

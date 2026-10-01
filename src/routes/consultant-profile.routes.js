@@ -5,6 +5,10 @@ import {
     getMyConsultantProfile,
     getConsultantProfileById,
     updateConsultantProfile,
+    getMyPayoutSettings,
+    updateMyPayoutSettings,
+    getBanks,
+    verifyAccount,
     searchConsultants,
     deleteConsultantProfile,
     getMyAvailabilitySlots,
@@ -17,7 +21,12 @@ import {
 import {
     createConsultantProfileValidator,
     updateConsultantProfileValidator,
+    payoutSettingsValidator,
+    updatePayoutSettingsValidator,
+    bankListValidator,
+    verifyAccountValidator,
     consultantSearchValidator,
+    availableSlotsValidator,
 } from "../validators/consultant-profile.validator.js";
 
 import validate from "../middlewares/validate.middleware.js";
@@ -47,7 +56,12 @@ router.get("/id/:id", getConsultantProfileById);
 router.get("/:id/availability", getPublicAvailabilitySlots);
 
 // Get available booking slots for a specific date (public)
-router.get("/:profileId/available-slots", getAvailableSlotsForDate);
+router.get(
+    "/:profileId/available-slots",
+    availableSlotsValidator,
+    validate,
+    getAvailableSlotsForDate
+);
 
 /*
 |--------------------------------------------------------------------------
@@ -79,13 +93,35 @@ protectedRouter.patch(
     updateConsultantProfile
 );
 
+// Get my payout settings
+protectedRouter.get("/payout-settings", getMyPayoutSettings);
+
+// Update my payout settings
+protectedRouter.patch(
+    "/payout-settings",
+    updatePayoutSettingsValidator,
+    validate,
+    updateMyPayoutSettings
+);
+
+// Get bank list
+protectedRouter.get("/payout-settings/banks", getBanks);
+
+// Verify bank account
+protectedRouter.get(
+    "/payout-settings/verify-account",
+    verifyAccountValidator,
+    validate,
+    verifyAccount
+);
+
 // Delete my consultant profile
 protectedRouter.delete("/profile", deleteConsultantProfile);
 
 // Availability slots (embedded in profile)
 protectedRouter.get("/availability", getMyAvailabilitySlots);
 protectedRouter.post("/availability", setMyAvailabilitySlots);
-protectedRouter.delete("/availability/:index", deleteMyAvailabilitySlot);
+protectedRouter.delete("/availability/:slotId", deleteMyAvailabilitySlot);
 
 router.use(protectedRouter);
 

@@ -7,6 +7,9 @@ import ApiError from "../utils/ApiError.js";
 import Review from "../models/Review.js";
 import Booking from "../models/Booking.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
+import ConsultationSession from "../models/ConsultationSession.js";
+
+import { SESSION_OUTCOME } from "../utils/constants.js";
 
 export const createReview = asyncHandler(async (req, res) => {
 
@@ -18,8 +21,13 @@ export const createReview = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Booking not found");
     }
 
-    if (booking.status !== "completed") {
-        throw new ApiError(400, "You can only review completed bookings");
+    // Review eligibility is based on the actual consultation outcome,
+    // not Booking.status. The outcome worker finalizes the session result
+    // independently of the booking lifecycle state.
+    const session = await ConsultationSession.findOne({ bookingId }).select("outcome");
+
+    if (!session || session.outcome !== SESSION_OUTCOME.COMPLETED) {
+        throw new ApiError(400, "You can only review completed sessions");
     }
 
     if (booking.clientId.toString() !== req.user._id.toString()) {
