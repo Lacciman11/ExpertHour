@@ -90,6 +90,29 @@ export const getMyPayoutById = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Request a payout for the authenticated consultant.
+ * Delegates to payoutService.createPayout which handles eligibility,
+ * threshold checks, and payout creation.
+ */
+export const requestPayout = asyncHandler(async (req, res) => {
+
+    const result = await payoutService.createPayout(req.user._id);
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            result,
+            result.created
+                ? "Payout requested successfully"
+                : result.duplicate
+                    ? "Payout already exists for this cycle"
+                    : result.reason || "Payout request completed"
+        )
+    );
+
+});
+
+/**
  * Get all payouts (admin only).
  * Returns all payouts with full details.
  */

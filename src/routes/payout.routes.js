@@ -3,6 +3,7 @@ import { Router } from "express";
 import {
     getMyPayouts,
     getMyPayoutById,
+    requestPayout,
     getAllPayouts,
     getPayoutById,
 } from "../controllers/payout.controller.js";
@@ -30,6 +31,12 @@ router.get(
     "/",
     authorize("CONSULTANT"),
     getMyPayouts
+);
+
+router.post(
+    "/",
+    authorize("CONSULTANT"),
+    requestPayout
 );
 
 router.get(
