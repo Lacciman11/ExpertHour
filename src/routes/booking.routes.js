@@ -154,8 +154,6 @@ consultantRouter.patch(
     declineBooking
 );
 
-router.use("/consultant", consultantRouter);
-
 /*
 |--------------------------------------------------------------------------
 | Admin Routes
@@ -175,6 +173,22 @@ adminRouter.get(
     getAllBookings
 );
 
+router.use("/consultant", consultantRouter);
 router.use("/admin", adminRouter);
+
+router.get(
+    "/:id",
+    bookingIdParamValidator,
+    validate,
+    getBookingById
+);
+
+router.patch(
+    "/:id/cancel",
+    bookingIdParamValidator,
+    cancelBookingValidator,
+    validate,
+    cancelBooking
+);
 
 export default router;
