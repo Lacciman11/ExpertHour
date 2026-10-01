@@ -72,21 +72,6 @@ router.get(
     getClientStats
 );
 
-router.get(
-    "/:id",
-    bookingIdParamValidator,
-    validate,
-    getBookingById
-);
-
-router.patch(
-    "/:id/cancel",
-    bookingIdParamValidator,
-    cancelBookingValidator,
-    validate,
-    cancelBooking
-);
-
 /*
 |--------------------------------------------------------------------------
 | Consultant Routes
