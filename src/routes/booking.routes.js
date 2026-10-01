@@ -13,6 +13,7 @@ import {
     getAllBookings,
     getPendingRequests,
     getConsultantUpcomingSessions,
+    getConsultantBookings,
     getEarningsSummary,
     acceptBooking,
     declineBooking,
@@ -124,6 +125,14 @@ consultantRouter.get(
 consultantRouter.get(
     "/upcoming-sessions",
     getConsultantUpcomingSessions
+);
+
+consultantRouter.get(
+    "/",
+    bookingStatusQueryValidator,
+    paginationQueryValidator,
+    validate,
+    getConsultantBookings
 );
 
 consultantRouter.get(

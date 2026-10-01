@@ -207,6 +207,26 @@ export const getConsultantUpcomingSessions = asyncHandler(async (req, res) => {
 
 });
 
+export const getConsultantBookings = asyncHandler(async (req, res) => {
+
+    const { status, page, limit } = req.query;
+
+    const result = await bookingService.findConsultantBookings(req.user._id, {
+        status,
+        page,
+        limit,
+    });
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            result,
+            "Consultant bookings fetched successfully"
+        )
+    );
+
+});
+
 export const getEarningsSummary = asyncHandler(async (req, res) => {
 
     const summary = await bookingService.getEarningsSummary(req.user._id);
