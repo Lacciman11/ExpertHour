@@ -1153,14 +1153,6 @@ class PaymentService {
                 booking.paymentStatus = "paid";
                 booking.paidAt = paidAt;
 
-                // Only transition booking to confirmed if it is currently pending.
-                // Cancelled and completed bookings must not be silently re-opened.
-                if (booking.status === "pending") {
-
-                    booking.status = "confirmed";
-
-                }
-
                 await booking.save({ session });
 
                 await session.commitTransaction();
@@ -1204,59 +1196,7 @@ class PaymentService {
 
             // 16. External side effects AFTER successful DB commit.
             // Do NOT put external calls inside the MongoDB transaction.
-            let meetingLink = booking.meetingLink;
-            let calendarResult = null;
-
-            try {
-
-                calendarResult = await googleCalendarService.createEventAndGetMeetLink(
-                    booking._id,
-                    booking.date,
-                    booking.time,
-                    booking.duration,
-                    booking.consultantId,
-                    booking.clientId
-                );
-
-                // Support both legacy string return and new object return.
-                if (typeof calendarResult === "string") {
-                    meetingLink = calendarResult;
-                } else if (calendarResult && typeof calendarResult === "object") {
-                    meetingLink = calendarResult.meetingLink || meetingLink;
-                }
-
-                // Only update booking if something changed to avoid unnecessary writes.
-                const needsUpdate =
-                    (meetingLink && meetingLink !== booking.meetingLink) ||
-                    (calendarResult?.googleEventId && calendarResult.googleEventId !== booking.googleEventId) ||
-                    (calendarResult?.googleConferenceId && calendarResult.googleConferenceId !== booking.googleConferenceId);
-
-                if (needsUpdate) {
-                    if (meetingLink) {
-                        booking.meetingLink = meetingLink;
-                    }
-                    if (calendarResult?.googleEventId) {
-                        booking.googleEventId = calendarResult.googleEventId;
-                    }
-                    if (calendarResult?.googleConferenceId) {
-                        booking.googleConferenceId = calendarResult.googleConferenceId;
-                    }
-                    await booking.save();
-                }
-
-            } catch (calendarError) {
-
-                paymentLogger.error("google_calendar_event_failed", {
-
-                    event: "google_calendar_event_failed",
-
-                    bookingId: booking._id.toString(),
-
-                    error: calendarError.message,
-
-                });
-
-            }
+            const meetingLink = booking.meetingLink;
 
             // 17. Send email notifications after DB commit.
             await this._sendPaymentSuccessEmails(booking, meetingLink, reference, correlationId);

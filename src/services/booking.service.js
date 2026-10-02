@@ -970,6 +970,26 @@ class BookingService {
         );
 
         if (booking) {
+            try {
+                const calendarResult = await googleCalendarService.createEventAndGetMeetLink(
+                    booking._id,
+                    booking.date,
+                    booking.time,
+                    booking.duration,
+                    booking.consultantId,
+                    booking.clientId
+                );
+
+                if (calendarResult) {
+                    booking.meetingLink = calendarResult.meetingLink || booking.meetingLink;
+                    booking.googleEventId = calendarResult.googleEventId || booking.googleEventId;
+                    booking.googleConferenceId = calendarResult.googleConferenceId || booking.googleConferenceId;
+                    await booking.save();
+                }
+            } catch (calendarError) {
+                console.error("[GoogleCalendar] Failed to create event for accepted booking:", calendarError.message);
+            }
+
             return booking;
         }
 
