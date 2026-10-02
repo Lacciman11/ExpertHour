@@ -15,6 +15,7 @@ import {
 import { koboToNaira } from "../utils/currency.js";
 import paymentLogger from "../utils/logger.js";
 import ApiError from "../utils/ApiError.js";
+import env from "../config/env.js";
 
 /**
  * Payment reconciliation error with classification for HTTP mapping.
@@ -412,6 +413,8 @@ class PaymentService {
 
             reference: payment.reference,
 
+            callback_url: `${env.appUrl}/booking/confirmation`,
+
             metadata: {
 
                 bookingId: booking._id.toString(),
@@ -691,6 +694,8 @@ class PaymentService {
             amount: amountInKobo,
 
             reference: payment.reference,
+
+            callback_url: `${env.appUrl}/booking/confirmation`,
 
             metadata: {
 
