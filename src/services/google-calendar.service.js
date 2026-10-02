@@ -143,23 +143,53 @@ class GoogleCalendarService {
             },
         };
 
-        const response = await axios.post(
-            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
-            event,
-            {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    "Content-Type": "application/json",
-                },
-                params: {
-                    conferenceDataVersion: 1,
-                },
+        let response;
+        try {
+            response = await axios.post(
+                "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+                event,
+                {
+                    headers: {
+                        Authorization: `Bearer ${accessToken}`,
+                        "Content-Type": "application/json",
+                    },
+                    params: {
+                        conferenceDataVersion: 1,
+                    },
+                }
+            );
+        } catch (error) {
+            if (error.response) {
+                console.error(
+                    `[GoogleCalendar] Google Calendar API error for booking ${bookingId}:`,
+                    error.message,
+                    `Status: ${error.response.status}`,
+                    `StatusText: ${error.response.statusText}`
+                );
+                if (error.response.data) {
+                    console.error(
+                        `[GoogleCalendar] Google Calendar API response data for booking ${bookingId}:`,
+                        JSON.stringify(error.response.data)
+                    );
+                }
+            } else {
+                console.error(`[GoogleCalendar] Google Calendar API error for booking ${bookingId}:`, error.message);
             }
-        );
+            throw error;
+        }
 
         const meetingLink = response.data.hangoutLink;
         const googleEventId = response.data.id || "";
         const googleConferenceId = response.data.conferenceData?.conferenceId || "";
+
+        if (!meetingLink) {
+            console.error(
+                `[GoogleCalendar] Google Calendar event created for booking ${bookingId} but no hangoutLink returned.`,
+                `EventId: ${googleEventId}`,
+                `ConferenceId: ${googleConferenceId}`
+            );
+            throw new Error("Google Meet link was not generated for the booking");
+        }
 
         return {
             meetingLink,
@@ -246,7 +276,22 @@ class GoogleCalendarService {
 
             return await this.createEvent(consultantId, bookingId, date, time, duration, timezone);
         } catch (error) {
-            console.error(`[GoogleCalendar] Failed to create event for booking ${bookingId}:`, error.message);
+            if (error.response) {
+                console.error(
+                    `[GoogleCalendar] Failed to create event for booking ${bookingId}:`,
+                    error.message,
+                    `Status: ${error.response.status}`,
+                    `StatusText: ${error.response.statusText}`
+                );
+                if (error.response.data) {
+                    console.error(
+                        `[GoogleCalendar] Response data for booking ${bookingId}:`,
+                        JSON.stringify(error.response.data)
+                    );
+                }
+            } else {
+                console.error(`[GoogleCalendar] Failed to create event for booking ${bookingId}:`, error.message);
+            }
             // Return null to allow fallback to manual meeting link
             return null;
         }
@@ -264,7 +309,22 @@ class GoogleCalendarService {
 
             return await this.updateEvent(consultantId, bookingId, date, time, duration, timezone);
         } catch (error) {
-            console.error(`[GoogleCalendar] Failed to update event for booking ${bookingId}:`, error.message);
+            if (error.response) {
+                console.error(
+                    `[GoogleCalendar] Failed to update event for booking ${bookingId}:`,
+                    error.message,
+                    `Status: ${error.response.status}`,
+                    `StatusText: ${error.response.statusText}`
+                );
+                if (error.response.data) {
+                    console.error(
+                        `[GoogleCalendar] Response data for booking ${bookingId}:`,
+                        JSON.stringify(error.response.data)
+                    );
+                }
+            } else {
+                console.error(`[GoogleCalendar] Failed to update event for booking ${bookingId}:`, error.message);
+            }
             // Return null to allow fallback
             return null;
         }
