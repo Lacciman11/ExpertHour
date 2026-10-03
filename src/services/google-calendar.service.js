@@ -12,9 +12,6 @@ class GoogleCalendarService {
         const scopes = [
             "https://www.googleapis.com/auth/calendar.events",
             "https://www.googleapis.com/auth/meetings.space.readonly",
-            "https://www.googleapis.com/auth/meetings.conferenceRecords.readonly",
-            "https://www.googleapis.com/auth/meetings.participants.readonly",
-            "https://www.googleapis.com/auth/meetings.attendance.readonly",
         ].join(" ");
 
         const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
