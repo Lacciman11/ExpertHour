@@ -4,15 +4,21 @@ import ConsultantProfile from "../models/ConsultantProfile.js";
 import Booking from "../models/Booking.js";
 import env from "../config/env.js";
 import { APP_TIMEZONE } from "../utils/constants.js";
+import tokenService from "./token.service.js";
 
 class GoogleCalendarService {
 
-    getGoogleAuthUrl() {
+    getGoogleAuthUrl(userId) {
         const { clientId, redirectUri } = env.googleCalendar;
         const scopes = [
             "https://www.googleapis.com/auth/calendar.events",
             "https://www.googleapis.com/auth/meetings.space.readonly",
         ].join(" ");
+
+        const state = tokenService.generateAccessToken({
+            userId,
+            type: "google_oauth_state",
+        });
 
         const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
             `client_id=${clientId}&` +
@@ -20,7 +26,8 @@ class GoogleCalendarService {
             `response_type=code&` +
             `scope=${encodeURIComponent(scopes)}&` +
             `access_type=offline&` +
-            `prompt=consent`;
+            `prompt=consent&` +
+            `state=${encodeURIComponent(state)}`;
 
         return authUrl;
     }
