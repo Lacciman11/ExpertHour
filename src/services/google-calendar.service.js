@@ -114,7 +114,7 @@ class GoogleCalendarService {
         return accessToken;
     }
 
-    async createEvent(consultantId, bookingId, date, time, duration, timezone = APP_TIMEZONE) {
+    async createEvent(consultantId, bookingId, date, time, duration, timezone = APP_TIMEZONE, attendees) {
         const profile = await ConsultantProfile.findOne({ userId: consultantId });
 
         if (!profile) {
@@ -137,6 +137,7 @@ class GoogleCalendarService {
                 dateTime: endTime,
                 timeZone: timezone,
             },
+            ...(attendees && attendees.length > 0 ? { attendees } : {}),
             conferenceData: {
                 createRequest: {
                     requestId: bookingId,
@@ -270,15 +271,20 @@ class GoogleCalendarService {
 
     async createEventAndGetMeetLink(bookingId, date, time, duration, consultantId, clientId) {
         try {
-            // Get timezone from client or consultant
+            // Get timezone and email from client or consultant
             const [client, consultant] = await Promise.all([
-                User.findById(clientId).select("timezone"),
-                User.findById(consultantId).select("timezone"),
+                User.findById(clientId).select("timezone email"),
+                User.findById(consultantId).select("timezone email"),
             ]);
 
             const timezone = client?.timezone || consultant?.timezone || APP_TIMEZONE;
 
-            return await this.createEvent(consultantId, bookingId, date, time, duration, timezone);
+            const attendees = [
+                ...(consultant?.email ? [{ email: consultant.email }] : []),
+                ...(client?.email && client.email !== consultant?.email ? [{ email: client.email }] : []),
+            ];
+
+            return await this.createEvent(consultantId, bookingId, date, time, duration, timezone, attendees);
         } catch (error) {
             if (error.response) {
                 console.error(

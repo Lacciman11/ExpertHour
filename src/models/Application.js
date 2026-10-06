@@ -1,6 +1,8 @@
 import mongoose from "mongoose";
 import validator from "validator";
 
+import { EXPERIENCE_OPTIONS, EXPERTISE_OPTIONS, INDUSTRY_OPTIONS } from "../utils/constants.js";
+
 const applicationSchema = new mongoose.Schema(
     {
         fullName: {
@@ -32,9 +34,9 @@ const applicationSchema = new mongoose.Schema(
 
         linkedinProfile: {
             type: String,
+            required: [true, "LinkedIn profile is required"],
             trim: true,
             maxlength: [200, "LinkedIn profile URL cannot exceed 200 characters"],
-            default: "",
         },
 
         currentTitle: {
@@ -46,46 +48,55 @@ const applicationSchema = new mongoose.Schema(
 
         organisation: {
             type: String,
-            required: [true, "Organisation name is required"],
+            required: false,
             trim: true,
             maxlength: [100, "Organisation name cannot exceed 100 characters"],
+            default: "",
         },
 
         yearsExperience: {
             type: String,
             required: [true, "Years of experience is required"],
             trim: true,
+            enum: EXPERIENCE_OPTIONS,
         },
 
         primaryIndustry: {
-            type: String,
+            type: [String],
             required: [true, "Primary industry is required"],
             trim: true,
+            enum: INDUSTRY_OPTIONS,
         },
 
         primaryExpertise: {
             type: String,
             required: [true, "Primary expertise is required"],
             trim: true,
+            maxlength: [100, "Primary expertise cannot exceed 100 characters"],
+            enum: EXPERTISE_OPTIONS,
         },
 
         otherExpertise: {
-            type: String,
+            type: [String],
+            required: false,
             trim: true,
-            default: "",
+            default: [],
+            enum: EXPERTISE_OPTIONS,
         },
 
         notableAchievement: {
             type: String,
+            required: [true, "Please share a notable professional achievement"],
             trim: true,
-            maxlength: [500, "Notable achievement cannot exceed 500 characters"],
+            maxlength: [1000, "Notable achievement cannot exceed 1000 characters"],
             default: "",
         },
 
         businessChallenge: {
             type: String,
+            required: [true, "Please share a significant business challenge you have helped solve"],
             trim: true,
-            maxlength: [500, "Business challenge cannot exceed 500 characters"],
+            maxlength: [1000, "Business challenge cannot exceed 1000 characters"],
             default: "",
         },
 
@@ -96,11 +107,25 @@ const applicationSchema = new mongoose.Schema(
             default: "",
         },
 
+        industryContributions: {
+            type: String,
+            trim: true,
+            maxlength: [1000, "Industry contributions cannot exceed 1000 characters"],
+            default: "",
+        },
+
+        projectsConsultingEvidence: {
+            type: String,
+            trim: true,
+            maxlength: [1000, "Projects / consulting evidence cannot exceed 1000 characters"],
+            default: "",
+        },
+
         whyJoin: {
             type: String,
             required: [true, "Please tell us why you would like to join"],
             trim: true,
-            maxlength: [500, "Why join cannot exceed 500 characters"],
+            maxlength: [1000, "Why join cannot exceed 1000 characters"],
         },
 
         additionalInfo: {
@@ -118,23 +143,68 @@ const applicationSchema = new mongoose.Schema(
         },
 
         cv: {
-            url: {
-                type: String,
-                default: "",
+            type: {
+                url: {
+                    type: String,
+                    default: "",
+                },
+                publicId: {
+                    type: String,
+                    default: "",
+                },
+                originalName: {
+                    type: String,
+                    default: "",
+                },
+                mimeType: {
+                    type: String,
+                    default: "",
+                },
             },
-            publicId: {
-                type: String,
-                default: "",
-            },
-            originalName: {
-                type: String,
-                default: "",
-            },
-            mimeType: {
-                type: String,
-                default: "",
-            },
+            default: undefined,
         },
+
+        cvs: [
+            {
+                url: {
+                    type: String,
+                    default: "",
+                },
+                publicId: {
+                    type: String,
+                    default: "",
+                },
+                originalName: {
+                    type: String,
+                    default: "",
+                },
+                mimeType: {
+                    type: String,
+                    default: "",
+                },
+            },
+        ],
+
+        qualifications: [
+            {
+                url: {
+                    type: String,
+                    default: "",
+                },
+                publicId: {
+                    type: String,
+                    default: "",
+                },
+                originalName: {
+                    type: String,
+                    default: "",
+                },
+                mimeType: {
+                    type: String,
+                    default: "",
+                },
+            },
+        ],
 
         status: {
             type: String,

@@ -142,3 +142,53 @@ export const CANCELLATION_WINDOW_MS = 36 * 60 * 60 * 1000;
 // Each booking claims one or more 30-minute slot locks.
 // The available-slots endpoint and booking service both use this granularity.
 export const SLOT_GRANULARITY_MINUTES = 30;
+
+// ---------------------------------------------------------------------------
+// Application Experience Options
+// ---------------------------------------------------------------------------
+
+export const EXPERIENCE_OPTIONS = Object.freeze([
+    "5-10 years",
+    "11-15 years",
+    "16-20 years",
+    "21-25 years",
+    "25+ years",
+]);
+
+// ---------------------------------------------------------------------------
+// Application Industry Options
+// ---------------------------------------------------------------------------
+
+export const INDUSTRY_OPTIONS = Object.freeze([
+    "Financial Services",
+    "Technology",
+    "Healthcare",
+    "Energy & Utilities",
+    "Manufacturing",
+    "Retail & Consumer",
+    "Telecommunications",
+    "Professional Services",
+    "Education",
+    "Government / Public Sector",
+    "Other",
+]);
+
+// ---------------------------------------------------------------------------
+// Application Expertise Options
+// ---------------------------------------------------------------------------
+
+export const EXPERTISE_OPTIONS = Object.freeze([
+    "Business Strategy",
+    "Business Development",
+    "Finance & Accounting",
+    "Marketing & Sales",
+    "Leadership & Management",
+    "Human Resources",
+    "Technology & Digital Transformation",
+    "Data & Analytics",
+    "Operations & Supply Chain",
+    "Legal & Compliance",
+    "Project & Product Management",
+    "Entrepreneurship",
+    "Other",
+]);

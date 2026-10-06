@@ -1,116 +1,95 @@
-import cloudinary from "../config/cloudinary.js";
+import { v2 as cloudinary } from "cloudinary";
 
-class CloudinaryService {
+cloudinary.config({
 
-    async uploadAvatar(file) {
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
 
-        const result = await cloudinary.uploader.upload(
-            `data:${file.mimetype};base64,${file.buffer.toString("base64")}`,
-            {
-                folder: "expert-hour/avatars",
-                transformation: [
-                    { width: 400, height: 400, crop: "fill", gravity: "face" },
-                    { quality: "auto" },
-                    { fetch_format: "auto" },
-                ],
-                resource_type: "image",
+    api_key: process.env.CLOUDINARY_API_KEY,
+
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+
+});
+
+const uploadCV = async (file) => {
+
+    return new Promise((resolve, reject) => {
+
+        const stream = cloudinary.uploader.upload_stream({
+
+            resource_type: "raw",
+
+            folder: "expert-hour/cvs",
+
+        }, (error, result) => {
+
+            if (error) {
+
+                reject(error);
+
+            } else {
+
+                resolve({ url: result.secure_url, publicId: result.public_id });
+
             }
-        );
 
-        return {
+        });
 
-            url: result.secure_url,
+        stream.end(file.buffer);
 
-            publicId: result.public_id,
+    });
 
-        };
+};
 
-    }
+const uploadQualification = async (file) => {
 
-    async uploadCV(file) {
+    return new Promise((resolve, reject) => {
 
-        try {
+        const stream = cloudinary.uploader.upload_stream({
 
-            const extension = this._getExtension(file.mimetype);
+            resource_type: "auto",
 
-            // Include the file extension in the public_id so Cloudinary
-            // serves the file with the correct Content-Type.
-            const publicId = extension
-                ? `${Date.now()}_${Math.random().toString(36).slice(2)}.${extension}`
-                : `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+            folder: "expert-hour/qualifications",
 
-            const result = await cloudinary.uploader.upload(
-                `data:${file.mimetype};base64,${file.buffer.toString("base64")}`,
-                {
-                    folder: "expert-hour/cvs",
-                    resource_type: "raw",
-                    public_id: publicId,
-                    access_mode: "public",
-                }
-            );
+        }, (error, result) => {
 
-            return {
+            if (error) {
 
-                url: result.secure_url,
+                reject(error);
 
-                publicId: result.public_id,
+            } else {
 
-            };
+                resolve({ url: result.secure_url, publicId: result.public_id });
 
-        } catch (error) {
+            }
 
-            console.error("[CloudinaryService] CV upload failed:", error);
+        });
 
-            throw new Error(`Failed to upload CV to Cloudinary: ${error.message}`);
+        stream.end(file.buffer);
 
-        }
+    });
 
-    }
+};
 
-    _getExtension(mimetype) {
+const deleteFile = async (publicId) => {
 
-        switch (mimetype) {
-
-            case "application/pdf":
-                return "pdf";
-
-            case "application/msword":
-                return "doc";
-
-            case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-                return "docx";
-
-            default:
-                return "";
-
-        }
-
-    }
-
-    async deleteAvatar(publicId) {
-
-        if (!publicId) {
-
-            return;
-
-        }
+    try {
 
         await cloudinary.uploader.destroy(publicId);
 
-    }
+    } catch (error) {
 
-    async deleteCV(publicId) {
-
-        if (!publicId) {
-
-            return;
-
-        }
-
-        await cloudinary.uploader.destroy(publicId, { resource_type: "raw" });
+        console.error("Error deleting file from Cloudinary:", error);
 
     }
 
-}
+};
 
-export default new CloudinaryService();
+export default {
+
+    uploadCV,
+
+    uploadQualification,
+
+    deleteFile,
+
+};

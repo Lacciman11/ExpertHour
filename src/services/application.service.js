@@ -1,143 +1,192 @@
-import Application from "../models/Application.js";
+import mongoose from "mongoose";
+
 import cloudinaryService from "./cloudinary.service.js";
-import googleSheetsService from "./google-sheets.service.js";
+
+import Application from "../models/Application.js";
+
 import ApiError from "../utils/ApiError.js";
-import { APP_TIMEZONE } from "../utils/constants.js";
 
 class ApplicationService {
 
-    async createApplication(data, cvFile) {
+    async createApplication(data, cvFiles = [], qualificationFiles = []) {
 
-        // Validate required fields
-        if (!data.fullName?.trim()) {
-            throw new ApiError(400, "Full name is required");
-        }
+        const { email } = data;
 
-        if (!data.email?.trim()) {
-            throw new ApiError(400, "Email is required");
-        }
-
-        if (!data.phone?.trim()) {
-            throw new ApiError(400, "Phone number is required");
-        }
-
-        if (!data.currentTitle?.trim()) {
-            throw new ApiError(400, "Current title is required");
-        }
-
-        if (!data.organisation?.trim()) {
-            throw new ApiError(400, "Organisation name is required");
-        }
-
-        if (!data.yearsExperience?.trim()) {
-            throw new ApiError(400, "Years of experience is required");
-        }
-
-        if (!data.primaryIndustry?.trim()) {
-            throw new ApiError(400, "Primary industry is required");
-        }
-
-        if (!data.primaryExpertise?.trim()) {
-            throw new ApiError(400, "Primary expertise is required");
-        }
-
-        if (!data.whyJoin?.trim()) {
-            throw new ApiError(400, "Please tell us why you would like to join");
-        }
-
-        if (!data.consent || data.consent !== "Yes") {
-            throw new ApiError(400, "Consent is required");
-        }
-
-        // Check for duplicate email
-        const existingApplication = await Application.findOne({ email: data.email.toLowerCase() });
+        const existingApplication = await Application.findOne({ email });
 
         if (existingApplication) {
 
-            throw new ApiError(400, "An application with this email already exists");
+            throw new ApiError(409, "An application with this email already exists");
 
         }
 
-        // Upload CV to Cloudinary if provided
-        let cvData = {
-            url: "",
-            publicId: "",
-            originalName: "",
-            mimeType: "",
+        const requiredFields = ["fullName", "email", "phone", "linkedinProfile", "currentTitle", "yearsExperience", "primaryIndustry", "primaryExpertise", "notableAchievement", "businessChallenge", "whyJoin", "consent"];
+
+        for (const field of requiredFields) {
+
+            if (!data[field] || (Array.isArray(data[field]) && data[field].length === 0)) {
+
+                throw new ApiError(400, `${field} is required`);
+
+            }
+
+        }
+
+        if (data.consent !== "Yes") {
+
+            throw new ApiError(400, "You must provide consent to submit the application");
+
+        }
+
+        const applicationData = {
+
+            fullName: data.fullName,
+
+            email: data.email,
+
+            phone: data.phone,
+
+            linkedinProfile: data.linkedinProfile,
+
+            currentTitle: data.currentTitle,
+
+            organisation: data.organisation || "",
+
+            yearsExperience: data.yearsExperience,
+
+            primaryIndustry: Array.isArray(data.primaryIndustry) ? data.primaryIndustry : [data.primaryIndustry],
+
+            primaryExpertise: data.primaryExpertise,
+
+            otherExpertise: Array.isArray(data.otherExpertise) ? data.otherExpertise : [],
+
+            notableAchievement: data.notableAchievement,
+
+            businessChallenge: data.businessChallenge,
+
+            certifications: data.certifications || "",
+
+            industryContributions: data.industryContributions || "",
+
+            projectsConsultingEvidence: data.projectsConsultingEvidence || "",
+
+            whyJoin: data.whyJoin,
+
+            additionalInfo: data.additionalInfo || "",
+
+            consent: data.consent,
+
         };
 
-        if (cvFile) {
+        if (cvFiles && cvFiles.length > 0) {
 
-            const maxSize = 10 * 1024 * 1024; // 10MB
+            const cvUploadPromises = cvFiles.map((file) => cloudinaryService.uploadCV(file));
 
-            if (cvFile.size > maxSize) {
+            const cvResults = await Promise.all(cvUploadPromises);
 
-                throw new ApiError(400, "CV must be less than 10MB");
+            applicationData.cvs = cvResults.map((result, index) => ({
+
+                url: result.url,
+
+                publicId: result.publicId,
+
+                originalName: cvFiles[index].originalname,
+
+                mimeType: cvFiles[index].mimetype,
+
+            }));
+
+            if (cvResults.length > 0) {
+
+                applicationData.cv = {
+
+                    url: cvResults[0].url,
+
+                    publicId: cvResults[0].publicId,
+
+                    originalName: cvFiles[0].originalname,
+
+                    mimeType: cvFiles[0].mimetype,
+
+                };
 
             }
-
-            const allowedTypes = [
-                "application/pdf",
-                "application/msword",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            ];
-
-            if (!allowedTypes.includes(cvFile.mimetype)) {
-
-                throw new ApiError(400, "Invalid CV file type. Only PDF, DOC, and DOCX are allowed.");
-
-            }
-
-            const uploadResult = await cloudinaryService.uploadCV(cvFile);
-
-            cvData = {
-                url: uploadResult.url,
-                publicId: uploadResult.publicId,
-                originalName: cvFile.originalname || cvFile.filename || "cv",
-                mimeType: cvFile.mimetype,
-            };
 
         }
 
-        // Create application in MongoDB
-        const application = await Application.create({
+        if (qualificationFiles && qualificationFiles.length > 0) {
 
-            ...data,
+            const qualificationUploadPromises = qualificationFiles.map((file) => cloudinaryService.uploadQualification(file));
 
-            email: data.email.toLowerCase(),
+            const qualificationResults = await Promise.all(qualificationUploadPromises);
 
-            cv: cvData,
+            applicationData.qualifications = qualificationResults.map((result, index) => ({
 
-        });
+                url: result.url,
 
-        // Attempt to sync to Google Sheets (non-critical)
-        try {
+                publicId: result.publicId,
 
-            await googleSheetsService.appendApplication(application);
+                originalName: qualificationFiles[index].originalname,
 
-            await Application.findByIdAndUpdate(application._id, {
+                mimeType: qualificationFiles[index].mimetype,
 
-                googleSheetSynced: true,
+            }));
 
-                googleSheetSyncedAt: new Date(),
+        }
 
-            });
+        const application = await Application.create(applicationData);
 
-        } catch (error) {
+        return application;
 
-    console.error("[ApplicationService] Google Sheets sync failed");
-    console.error("Message:", error.message);
-    console.error("Code:", error.code);
-    console.error("Status:", error.response?.status);
-    console.error("Google response:", error.response?.data);
+    }
 
-    await Application.findByIdAndUpdate(application._id, {
+    async getApplications(filters = {}) {
 
-                googleSheetSynced: false,
+        const { status, page = 1, limit = 10 } = filters;
 
-                googleSheetSyncError: error.message,
+        const query = {};
 
-            });
+        if (status) {
+
+            query.status = status;
+
+        }
+
+        const applications = await Application.find(query)
+
+            .sort({ createdAt: -1 })
+
+            .skip((page - 1) * limit)
+
+            .limit(Number(limit));
+
+        const total = await Application.countDocuments(query);
+
+        return { applications, total, page: Number(page), limit: Number(limit) };
+
+    }
+
+    async getApplicationById(id) {
+
+        const application = await Application.findById(id);
+
+        if (!application) {
+
+            throw new ApiError(404, "Application not found");
+
+        }
+
+        return application;
+
+    }
+
+    async updateApplicationStatus(id, status) {
+
+        const application = await Application.findByIdAndUpdate(id, { status }, { new: true });
+
+        if (!application) {
+
+            throw new ApiError(404, "Application not found");
 
         }
 
@@ -147,5 +196,6 @@ class ApplicationService {
 
 }
 
+const applicationService = new ApplicationService();
 
-export default new ApplicationService();
+export default applicationService;
