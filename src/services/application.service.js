@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 
 import cloudinaryService from "./cloudinary.service.js";
 
+import googleSheetsService from "./google-sheets.service.js";
+
 import Application from "../models/Application.js";
 
 import ApiError from "../utils/ApiError.js";
@@ -136,7 +138,48 @@ class ApplicationService {
 
         const application = await Application.create(applicationData);
 
-        return application;
+        // Attempt to sync to Google Sheets (non-critical)
+        try {
+
+            await googleSheetsService.appendApplication(application);
+
+            await Application.findByIdAndUpdate(application._id, {
+
+                googleSheetSynced: true,
+
+                googleSheetSyncedAt: new Date(),
+
+                googleSheetSyncError: "",
+
+            });
+
+        } catch (error) {
+
+            console.error("[ApplicationService] Google Sheets sync failed");
+
+            console.error("Message:", error.message);
+
+            console.error("Code:", error.code);
+
+            console.error("Status:", error.response?.status);
+
+            console.error("Google response:", error.response?.data);
+
+            await Application.findByIdAndUpdate(application._id, {
+
+                googleSheetSynced: false,
+
+                googleSheetSyncedAt: null,
+
+                googleSheetSyncError: error.message,
+
+            });
+
+        }
+
+        const updatedApplication = await Application.findById(application._id);
+
+        return updatedApplication;
 
     }
 
