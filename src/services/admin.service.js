@@ -20,6 +20,7 @@ class AdminService {
             completedBookings,
             activeUsers,
             bannedUsers,
+            concludedConsultants,
         ] = await Promise.all([
 
             User.countDocuments({ role: "BUSINESS_OWNER" }),
@@ -50,9 +51,12 @@ class AdminService {
 
             User.countDocuments({ isActive: false }),
 
+            ConsultantProfile.countDocuments({ approvalStatus: "approved" }),
+
         ]);
 
         const totalRevenue = koboToNaira(revenueResult.length > 0 ? revenueResult[0].totalRevenue : 0);
+        const notConcludedConsultants = totalConsultants - concludedConsultants;
 
         return {
 
@@ -64,6 +68,8 @@ class AdminService {
             completedBookings,
             activeUsers,
             bannedUsers,
+            concludedConsultants,
+            notConcludedConsultants,
 
         };
 
