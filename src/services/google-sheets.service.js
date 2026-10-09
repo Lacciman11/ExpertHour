@@ -191,6 +191,10 @@ class GoogleSheetsService {
             application.additionalInfo || "",
             application.consent || "",
             application.cv?.url || "",
+            application.industryContributions || "",
+            application.projectsConsultingEvidence || "",
+            this._joinUrls(application.cvs),
+            this._joinUrls(application.qualifications),
         ];
 
         try {
@@ -221,6 +225,24 @@ class GoogleSheetsService {
             throw error;
 
         }
+
+    }
+
+    _joinUrls(fileRecords) {
+
+        if (!Array.isArray(fileRecords)) {
+
+            return "";
+
+        }
+
+        return fileRecords
+
+            .map((record) => record && record.url)
+
+            .filter((url) => typeof url === "string" && url.length > 0)
+
+            .join(", ");
 
     }
 

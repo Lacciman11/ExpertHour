@@ -47,14 +47,19 @@ router.use(authenticate());
 |--------------------------------------------------------------------------
 */
 
-router.post(
+const clientRouter = Router();
+
+clientRouter.use(authenticate());
+clientRouter.use(authorize("BUSINESS_OWNER"));
+
+clientRouter.post(
     "/",
     createBookingValidator,
     validate,
     createBooking
 );
 
-router.get(
+clientRouter.get(
     "/",
     bookingStatusQueryValidator,
     paginationQueryValidator,
@@ -62,12 +67,12 @@ router.get(
     getMyBookings
 );
 
-router.get(
+clientRouter.get(
     "/upcoming",
     getUpcomingBookings
 );
 
-router.get(
+clientRouter.get(
     "/client/stats",
     getClientStats
 );
@@ -158,6 +163,7 @@ adminRouter.get(
     getAllBookings
 );
 
+router.use("/", clientRouter);
 router.use("/consultant", consultantRouter);
 router.use("/admin", adminRouter);
 
