@@ -3,10 +3,9 @@ import env from "../../config/env.js";
 import emailVerificationTokenService
     from "../email-verification-token.service.js";
 
-import {emailService} from "../email/index.js";
+import emailOutboxService from "../email-outbox.service.js";
 
-import verifyEmailTemplate
-    from "../email/templates/verify-email.template.js";
+import { EMAIL_TEMPLATE_ID, NOTIFICATION_CATEGORY } from "../../utils/constants.js";
 
 import userService from "../user.service.js";
 
@@ -64,59 +63,56 @@ class VerifyEmailService {
             Date.now() + 24 * 60 * 60 * 1000
         );
 
-        await emailVerificationTokenService.create({
-            userId: user._id,
-            tokenHash,
-            expiresAt,
-        });
+        const verificationToken =
+            await emailVerificationTokenService.create({
+                userId: user._id,
+                tokenHash,
+                expiresAt,
+            });
 
         const verificationUrl =
             `${env.appUrl}/api/v1/auth/verify-email?token=${rawToken}`;
 
-        // Send email in the background so the response is not blocked by SMTP timeouts
-        const sendVerificationEmail = async () => {
+        // Queue the verification email for asynchronous delivery. The token is
+        // already persisted, so a queue failure is logged for operators and
+        // does not change the resend response.
+        //
+        // The dedupe key uses the token document id, which is unique per
+        // token generation: a legitimate repeat request rotates the token and
+        // therefore produces a distinct key, so it is never incorrectly
+        // deduplicated against an earlier email.
+        try {
 
-            try {
+            await emailOutboxService.enqueue({
 
-                await emailService.send({
+                recipientId: user._id,
 
-                    to: user.email,
+                to: user.email,
 
-                    subject: "Verify your ExpertHour email",
+                category: NOTIFICATION_CATEGORY.ACCOUNT,
 
-                    html: verifyEmailTemplate({
+                templateId: EMAIL_TEMPLATE_ID.VERIFY_EMAIL,
 
-                        firstName: user.firstName,
+                templateData: {
+                    firstName: user.firstName,
+                    verificationUrl,
+                },
 
-                        verificationUrl,
+                dedupeKey: `verify-email:${user._id}:${verificationToken._id}`,
 
-                    }),
+            });
 
-                });
+        } catch (error) {
 
-            } catch (error) {
+            console.error(
+                "Failed to queue verification email:",
+                {
+                    userId: user._id.toString(),
+                    error: error?.message || error,
+                }
+            );
 
-                console.error(
-
-                    "Failed to send verification email:",
-
-                    {
-
-                        userId: user._id.toString(),
-
-                        email: user.email,
-
-                        error: error?.message || error,
-
-                    }
-
-                );
-
-            }
-
-        };
-
-        sendVerificationEmail();
+        }
 
     }
 

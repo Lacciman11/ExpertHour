@@ -4,9 +4,9 @@ import User from "../../models/User.js";
 
 import passwordResetTokenService from "../password-reset-token.service.js";
 
-import {emailService} from "../email/index.js";
+import emailOutboxService from "../email-outbox.service.js";
 
-import forgotPasswordTemplate from "../email/templates/forgot-password.template.js";
+import { EMAIL_TEMPLATE_ID, NOTIFICATION_CATEGORY } from "../../utils/constants.js";
 
 class ForgotPasswordService {
 
@@ -52,7 +52,7 @@ class ForgotPasswordService {
             Date.now() + 15 * 60 * 1000
         );
 
-        await passwordResetTokenService.create({
+        const resetToken = await passwordResetTokenService.create({
 
             userId: user._id,
 
@@ -73,63 +73,54 @@ class ForgotPasswordService {
 
         /*
         |--------------------------------------------------------------------------
-        | Send Email
+        | Queue Email
         |--------------------------------------------------------------------------
         |
-        | Swallow delivery errors so the response stays uniform and does not
+        | Delivery is asynchronous and owned by the outbox worker. Enqueue
+        | failures are swallowed so the response stays uniform and does not
         | leak whether an account exists (email enumeration). The token has
-        | already been persisted above; a failed send is logged for retry.
+        | already been persisted above, so a failed enqueue is logged for ops
+        | to retry; the client receives the same generic response either way.
+        |
+        | The dedupe key uses the token document id, which is unique per token
+        | generation and contains no token material. A legitimate repeat
+        | request rotates the token and therefore produces a distinct key.
+        |
+        | The reset URL and token are never logged.
         */
 
-        // Send email in the background so the response is not blocked by SMTP timeouts
-        const sendResetEmail = async () => {
+        try {
 
-            try {
+            await emailOutboxService.enqueue({
 
-                await emailService.send({
+                recipientId: user._id,
 
-                    to: user.email,
+                to: user.email,
 
-                    subject: "Reset your ExpertHour password",
+                category: NOTIFICATION_CATEGORY.ACCOUNT,
 
-                    html: forgotPasswordTemplate({
+                templateId: EMAIL_TEMPLATE_ID.FORGOT_PASSWORD,
 
-                        firstName: user.firstName,
+                templateData: {
+                    firstName: user.firstName,
+                    resetUrl,
+                },
 
-                        resetUrl,
+                dedupeKey: `forgot-password:${user._id}:${resetToken._id}`,
 
-                    }),
+            });
 
-                });
+        } catch (error) {
 
-            } catch (error) {
+            console.error(
+                "Failed to queue password reset email:",
+                {
+                    userId: user._id.toString(),
+                    error: error?.message || error,
+                }
+            );
 
-                /*
-                |------------------------------------------------------------------
-                | Delivery failed
-                |
-                | The token is already persisted, so we keep the generic success
-                | response to avoid email enumeration. We log with enough context
-                | (user id + email) so ops can alert/retry. The error is NOT
-                | re-thrown: the client must receive the same uniform response
-                | whether or not the email was delivered.
-                |------------------------------------------------------------------
-                */
-
-                console.error(
-                    "Failed to send password reset email:",
-                    {
-                        userId: user._id.toString(),
-                        email: user.email,
-                        error: error?.message || error,
-                    }
-                );
-
-            }
-
-        };
-
-        sendResetEmail();
+        }
 
     }
 

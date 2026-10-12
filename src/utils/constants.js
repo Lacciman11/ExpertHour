@@ -109,6 +109,84 @@ export const PAYOUT_STATUS = Object.freeze({
     CANCELLED: "CANCELLED",
 });
 
+// ---------------------------------------------------------------------------
+// Notification Categories
+// ---------------------------------------------------------------------------
+
+// Stable notification categories. Every Notification document carries exactly
+// one of these values, and every User.notificationPreferences entry is keyed
+// by the same value. Adding a category requires adding it here AND to the
+// User preference schema defaults.
+export const NOTIFICATION_CATEGORY = Object.freeze({
+    BOOKING: "booking",
+    CONSULTATION: "consultation",
+    PAYMENT: "payment",
+    REFUND: "refund",
+    EARNING: "earning",
+    PAYOUT: "payout",
+    REVIEW: "review",
+    ACCOUNT: "account",
+    ADMIN: "admin",
+    MARKETING: "marketing",
+});
+
+// Categories whose email delivery is mandatory and cannot be disabled by a
+// user preference. Security and transactional receipts must always be sent.
+// Preference enforcement happens at delivery time (out of scope for the
+// persistence layer); this list is the single source of truth for it.
+export const MANDATORY_EMAIL_CATEGORIES = Object.freeze([
+    NOTIFICATION_CATEGORY.ACCOUNT,
+    NOTIFICATION_CATEGORY.PAYMENT,
+    NOTIFICATION_CATEGORY.REFUND,
+]);
+
+// Categories whose in-app delivery is mandatory and cannot be disabled.
+export const MANDATORY_IN_APP_CATEGORIES = Object.freeze([
+    NOTIFICATION_CATEGORY.ACCOUNT,
+    NOTIFICATION_CATEGORY.PAYMENT,
+    NOTIFICATION_CATEGORY.REFUND,
+    NOTIFICATION_CATEGORY.ADMIN,
+]);
+
+// ---------------------------------------------------------------------------
+// Email Outbox
+// ---------------------------------------------------------------------------
+
+// Lifecycle states for an EmailOutbox job.
+//
+//   pending    → enqueued and eligible to be claimed once nextAttemptAt is due
+//   processing → claimed by a worker; protected by processingLeaseUntil
+//   sent       → the provider accepted the message and delivery is recorded
+//   suppressed → intentionally NOT sent (user preference or permanent
+//                recipient condition). Deliberately distinct from `sent` so a
+//                skipped email is never reported as delivered.
+//   failed     → a transient failure occurred; retry is scheduled
+//   dead       → retry limit exhausted, or a permanent failure that retrying
+//                cannot fix (invalid recipient, invalid payload)
+export const EMAIL_OUTBOX_STATUS = Object.freeze({
+    PENDING: "pending",
+    PROCESSING: "processing",
+    SENT: "sent",
+    SUPPRESSED: "suppressed",
+    FAILED: "failed",
+    DEAD: "dead",
+});
+
+// Stable identifiers for the email templates that exist today.
+//
+// Sourced from the exports of src/services/email/index.js. Adding a template
+// requires adding it here AND to the allowlist in
+// src/services/email-outbox.service.js, which maps each id to its render
+// function and permitted payload keys.
+export const EMAIL_TEMPLATE_ID = Object.freeze({
+    VERIFY_EMAIL: "verify-email",
+    FORGOT_PASSWORD: "forgot-password",
+    PAYMENT_SUCCESS: "payment-success",
+    PAYMENT_FAILURE: "payment-failure",
+    PAYMENT_SUCCESS_CONSULTANT: "payment-success-consultant",
+    PAYMENT_FAILURE_CONSULTANT: "payment-failure-consultant",
+});
+
 export const MINIMUM_PAYOUT_KOBO = 1000000; // ₦10,000 in kobo
 
 // ---------------------------------------------------------------------------

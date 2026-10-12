@@ -5,13 +5,11 @@ import Booking from "../models/Booking.js";
 import Payment from "../models/Payment.js";
 import User from "../models/User.js";
 import googleCalendarService from "./google-calendar.service.js";
+import emailOutboxService from "./email-outbox.service.js";
 import {
-    emailService,
-    paymentSuccessTemplate,
-    paymentFailureTemplate,
-    paymentSuccessConsultantTemplate,
-    paymentFailureConsultantTemplate,
-} from "./email/index.js";
+    EMAIL_TEMPLATE_ID,
+    NOTIFICATION_CATEGORY,
+} from "../utils/constants.js";
 import { koboToNaira } from "../utils/currency.js";
 import paymentLogger from "../utils/logger.js";
 import ApiError from "../utils/ApiError.js";
@@ -1758,6 +1756,22 @@ class PaymentService {
     // Use refundService.processRefund() or refundService.processRefundWithPaystack()
     // to ensure ConsultantEarning adjustment fields and refundHistory are updated.
 
+    /**
+     * Queue the payment-success emails for a settled booking.
+     *
+     * Delivery is asynchronous and owned by the email outbox worker. This
+     * method is called AFTER the payment/booking transaction has committed,
+     * so a queue failure can never reverse a successful payment.
+     *
+     * Dedupe keys are scoped to the payment reference and the recipient, so
+     * re-processing the same settlement event (webhook replay, polling retry)
+     * cannot create a second job, while a genuinely distinct payment produces
+     * a distinct key.
+     *
+     * Consultant privacy: the consultant payload deliberately omits the
+     * payment amount and reference. The outbox template registry also rejects
+     * those keys for consultant templates, so the rule is enforced twice.
+     */
     async _sendPaymentSuccessEmails(booking, meetingLink, reference) {
 
         try {
@@ -1803,68 +1817,54 @@ class PaymentService {
 
             });
 
-            // Send email to client
-            // booking.amount is in kobo; convert to Naira for display
-            const clientHtml = paymentSuccessTemplate({
+            // booking.amount is in kobo; convert to Naira for display.
+            const amount = (booking.amount / 100).toFixed(2);
 
-                clientName: client.firstName,
+            // Client email: full payment detail, including amount and reference.
+            await this._enqueuePaymentEmail({
 
-                consultantName: `${consultant.firstName} ${consultant.lastName}`,
+                recipient: client,
 
-                amount: (booking.amount / 100).toFixed(2),
-
-                date,
-
-                time,
-
-                duration: booking.duration,
-
-                meetingLink,
+                templateId: EMAIL_TEMPLATE_ID.PAYMENT_SUCCESS,
 
                 reference,
 
-            });
-
-            await emailService.send({
-
-                to: client.email,
-
-                subject: "Payment Successful - Your Session is Confirmed",
-
-                html: clientHtml,
-
-            });
-
-            // Send email to consultant (no amount or payment reference per privacy policy)
-            const consultantHtml = paymentSuccessConsultantTemplate({
-
-                clientName: `${client.firstName} ${client.lastName}`,
-
-                consultantName: consultant.firstName,
-
-                date,
-
-                time,
-
-                duration: booking.duration,
-
-                meetingLink,
+                templateData: {
+                    clientName: client.firstName,
+                    consultantName: `${consultant.firstName} ${consultant.lastName}`,
+                    amount,
+                    date,
+                    time,
+                    duration: booking.duration,
+                    meetingLink,
+                    reference,
+                },
 
             });
 
-            await emailService.send({
+            // Consultant email: no amount and no payment reference (privacy policy).
+            await this._enqueuePaymentEmail({
 
-                to: consultant.email,
+                recipient: consultant,
 
-                subject: "New Booking Confirmed - Payment Received",
+                templateId: EMAIL_TEMPLATE_ID.PAYMENT_SUCCESS_CONSULTANT,
 
-                html: consultantHtml,
+                reference,
+
+                templateData: {
+                    consultantName: consultant.firstName,
+                    clientName: `${client.firstName} ${client.lastName}`,
+                    date,
+                    time,
+                    duration: booking.duration,
+                    meetingLink,
+                },
 
             });
 
-            paymentLogger.info("payment_success_emails_sent", {
+            paymentLogger.info("payment_success_emails_queued", {
 
-                event: "payment_success_emails_sent",
+                event: "payment_success_emails_queued",
 
                 bookingId: booking._id.toString(),
 
@@ -1872,12 +1872,21 @@ class PaymentService {
 
         } catch (error) {
 
-            console.error(`[Email] Failed to send payment success emails for booking ${booking._id}:`, error.message);
+            // The payment is already committed. A queue failure is logged for
+            // operators and must never propagate to the payment caller.
+            console.error(`[Email] Failed to queue payment success emails for booking ${booking._id}:`, error.message);
 
         }
 
     }
 
+    /**
+     * Queue the payment-failure emails for a terminally failed payment.
+     *
+     * Same contract as _sendPaymentSuccessEmails: asynchronous delivery, no
+     * effect on payment state, recipient-scoped dedupe keys, and no amount or
+     * reference in the consultant payload.
+     */
     async _sendPaymentFailureEmails(booking, reference) {
 
         try {
@@ -1923,64 +1932,52 @@ class PaymentService {
 
             });
 
-            // Send email to client
-            // booking.amount is in kobo; convert to Naira for display
-            const clientHtml = paymentFailureTemplate({
+            // booking.amount is in kobo; convert to Naira for display.
+            const amount = (booking.amount / 100).toFixed(2);
 
-                clientName: client.firstName,
+            // Client email: full payment detail, including amount and reference.
+            await this._enqueuePaymentEmail({
 
-                consultantName: `${consultant.firstName} ${consultant.lastName}`,
+                recipient: client,
 
-                amount: (booking.amount / 100).toFixed(2),
-
-                date,
-
-                time,
+                templateId: EMAIL_TEMPLATE_ID.PAYMENT_FAILURE,
 
                 reference,
 
-                reason: "Payment could not be processed. Please try again.",
+                templateData: {
+                    clientName: client.firstName,
+                    consultantName: `${consultant.firstName} ${consultant.lastName}`,
+                    amount,
+                    date,
+                    time,
+                    reference,
+                    reason: "Payment could not be processed. Please try again.",
+                },
 
             });
 
-            await emailService.send({
+            // Consultant email: no amount and no payment reference (privacy policy).
+            await this._enqueuePaymentEmail({
 
-                to: client.email,
+                recipient: consultant,
 
-                subject: "Payment Failed - Action Required",
+                templateId: EMAIL_TEMPLATE_ID.PAYMENT_FAILURE_CONSULTANT,
 
-                html: clientHtml,
+                reference,
 
-            });
-
-            // Send email to consultant (no amount or payment reference per privacy policy)
-            const consultantHtml = paymentFailureConsultantTemplate({
-
-                clientName: `${client.firstName} ${client.lastName}`,
-
-                consultantName: consultant.firstName,
-
-                date,
-
-                time,
-
-                reason: "Client payment could not be processed.",
+                templateData: {
+                    consultantName: consultant.firstName,
+                    clientName: `${client.firstName} ${client.lastName}`,
+                    date,
+                    time,
+                    reason: "Client payment could not be processed.",
+                },
 
             });
 
-            await emailService.send({
+            paymentLogger.info("payment_failure_emails_queued", {
 
-                to: consultant.email,
-
-                subject: "Booking Payment Failed",
-
-                html: consultantHtml,
-
-            });
-
-            paymentLogger.info("payment_failure_emails_sent", {
-
-                event: "payment_failure_emails_sent",
+                event: "payment_failure_emails_queued",
 
                 bookingId: booking._id.toString(),
 
@@ -1988,7 +1985,55 @@ class PaymentService {
 
         } catch (error) {
 
-            console.error(`[Email] Failed to send payment failure emails for booking ${booking._id}:`, error.message);
+            // The payment state is already persisted. A queue failure is
+            // logged and must never propagate to the payment caller.
+            console.error(`[Email] Failed to queue payment failure emails for booking ${booking._id}:`, error.message);
+
+        }
+
+    }
+
+    /**
+     * Enqueue a single payment email, isolating queue failures per recipient.
+     *
+     * Each recipient is queued independently so a failure for one does not
+     * prevent the other from being queued. Only the recipient id and the
+     * error message are logged — never the payload or rendered content.
+     *
+     * @private
+     */
+    async _enqueuePaymentEmail({ recipient, templateId, reference, templateData }) {
+
+        try {
+
+            await emailOutboxService.enqueue({
+
+                recipientId: recipient._id,
+
+                to: recipient.email,
+
+                category: NOTIFICATION_CATEGORY.PAYMENT,
+
+                templateId,
+
+                templateData,
+
+                // Stable, event- and recipient-specific: the same settlement
+                // event re-processed for the same recipient resolves to the
+                // same key and is deduplicated by the unique index.
+                dedupeKey: `${templateId}:${recipient._id}:${reference}`,
+
+            });
+
+        } catch (error) {
+
+            console.error(
+                `[Email] Failed to queue ${templateId} email:`,
+                {
+                    recipientId: recipient._id.toString(),
+                    error: error?.message || error,
+                }
+            );
 
         }
 

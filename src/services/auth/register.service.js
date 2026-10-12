@@ -6,9 +6,8 @@ import userService from "../user.service.js";
 import tokenService from "../token.service.js";
 import sessionService from "../session.service.js";
 import emailVerificationTokenService from "../email-verification-token.service.js";
-import { emailService } from "../email/index.js";
-import verifyEmailTemplate
-    from "../email/templates/verify-email.template.js";
+import emailOutboxService from "../email-outbox.service.js";
+import { EMAIL_TEMPLATE_ID, NOTIFICATION_CATEGORY } from "../../utils/constants.js";
 
 const register = async ({
     firstName,
@@ -52,63 +51,62 @@ const register = async ({
         Date.now() + 24 * 60 * 60 * 1000
     );
 
-    await emailVerificationTokenService.create({
-        userId: user._id,
-        tokenHash,
-        expiresAt,
-    });
+    const verificationToken =
+        await emailVerificationTokenService.create({
+            userId: user._id,
+            tokenHash,
+            expiresAt,
+        });
 
     const verificationUrl =
         `${env.appUrl}/api/v1/auth/verify-email?token=${rawToken}`;
 
+    // `emailSent` reports that the verification email was durably queued for
+    // delivery. Delivery itself is asynchronous and owned by the outbox
+    // worker, so a transient SMTP failure never blocks or rolls back
+    // account creation.
     let emailSent = false;
 
-    // Send email in the background so the response is not blocked by SMTP timeouts
-    const sendVerificationEmail = async () => {
+    try {
 
-        try {
+        // Awaited so a persistence failure is not mistaken for a queued
+        // message. The dedupe key uses the token document id, which is unique
+        // per token generation and contains no token material.
+        await emailOutboxService.enqueue({
 
-            await emailService.send({
+            recipientId: user._id,
 
-                to: user.email,
+            to: user.email,
 
-                subject: "Verify your ExpertHour email",
+            category: NOTIFICATION_CATEGORY.ACCOUNT,
 
-                html: verifyEmailTemplate({
+            templateId: EMAIL_TEMPLATE_ID.VERIFY_EMAIL,
 
-                    firstName: user.firstName,
+            templateData: {
+                firstName: user.firstName,
+                verificationUrl,
+            },
 
-                    verificationUrl,
+            dedupeKey: `verify-email:${user._id}:${verificationToken._id}`,
 
-                }),
+        });
 
-            });
+        emailSent = true;
 
-            emailSent = true;
+    } catch (error) {
 
-        } catch (error) {
+        // The account and token are already persisted. A queue failure is
+        // logged for operators and must not surface to the client or change
+        // the registration response.
+        console.error(
+            "Failed to queue verification email:",
+            {
+                userId: user._id.toString(),
+                error: error?.message || error,
+            }
+        );
 
-            console.error(
-
-                "Failed to send verification email:",
-
-                {
-
-                    userId: user._id.toString(),
-
-                    email: user.email,
-
-                    error: error?.message || error,
-
-                }
-
-            );
-
-        }
-
-    };
-
-    sendVerificationEmail();
+    }
 
     const payload = {
         userId: user._id,

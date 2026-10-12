@@ -25,6 +25,9 @@ import emailVerificationService from "./email-verification-token.service.js";
 import userService from "./user.service.js";
 import tokenService from "./token.service.js";
 import sessionService from "./session.service.js";
+import notificationService from "./notification.service.js";
+import emailOutboxService from "./email-outbox.service.js";
+import emailOutboxWorker from "./email-outbox.worker.js";
 
 const resetPasswordService = passwordResetService;
 const passwordResetTokenService = passwordResetService;
@@ -60,4 +63,7 @@ export {
     emailVerificationService,
     userService,
     tokenService,
+    notificationService,
+    emailOutboxService,
+    emailOutboxWorker,
 };

@@ -42,6 +42,16 @@ import {
     renderResetSuccessPage,
 } from "./auth.page.controller.js";
 
+import {
+    getMyNotifications,
+    getUnreadCount,
+    getMyPreferences,
+    updateMyPreferences,
+    markNotificationAsRead,
+    markAllNotificationsAsRead,
+    getAdminNotifications,
+} from "./notification.controller.js";
+
 export {
     register,
     login,
@@ -72,4 +82,11 @@ export {
     deleteCategory,
     renderResetPasswordPage,
     renderResetSuccessPage,
+    getMyNotifications,
+    getUnreadCount,
+    getMyPreferences,
+    updateMyPreferences,
+    markNotificationAsRead,
+    markAllNotificationsAsRead,
+    getAdminNotifications,
 };

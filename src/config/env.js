@@ -2,6 +2,47 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+/**
+ * Parse an integer environment value, clamped to [min, max].
+ *
+ * Falls back to `fallback` when the value is missing, non-numeric, or out of
+ * range. Used for worker tuning values where a malformed variable must not
+ * produce a zero/negative interval or an unbounded batch.
+ *
+ * @param {string|undefined} raw - the raw environment value
+ * @param {number} fallback - safe default
+ * @param {number} min - inclusive lower bound
+ * @param {number} max - inclusive upper bound
+ * @returns {number}
+ */
+const boundedInt = (raw, fallback, min, max) => {
+
+    if (raw === undefined || raw === null || String(raw).trim() === "") {
+
+        return fallback;
+
+    }
+
+    const parsed = Number(raw);
+
+    if (!Number.isFinite(parsed)) {
+
+        return fallback;
+
+    }
+
+    const rounded = Math.floor(parsed);
+
+    if (rounded < min || rounded > max) {
+
+        return fallback;
+
+    }
+
+    return rounded;
+
+};
+
 const env = {
 
     nodeEnv: process.env.NODE_ENV || "development",
@@ -119,6 +160,31 @@ const env = {
         syncRetryIntervalMs: parseInt(process.env.GOOGLE_MEET_ATTENDANCE_RETRY_INTERVAL_MS || "3600000", 10),
 
         batchSize: parseInt(process.env.GOOGLE_MEET_ATTENDANCE_BATCH_SIZE || "20", 10),
+
+    },
+
+    // ---------------------------------------------------------------------------
+    // Email Outbox
+    // ---------------------------------------------------------------------------
+
+    // Durable, retryable email delivery. Values are bounded so a malformed
+    // environment variable cannot produce a zero/negative interval, an
+    // unbounded batch, or a retry policy that never terminates. Out-of-range
+    // values fall back to the safe default rather than crashing startup.
+
+    emailOutbox: {
+
+        intervalMs: boundedInt(process.env.EMAIL_OUTBOX_INTERVAL_MS, 300000, 1000, 3600000),
+
+        batchSize: boundedInt(process.env.EMAIL_OUTBOX_BATCH_SIZE, 10, 1, 100),
+
+        maxAttempts: boundedInt(process.env.EMAIL_OUTBOX_MAX_ATTEMPTS, 5, 1, 20),
+
+        baseDelayMs: boundedInt(process.env.EMAIL_OUTBOX_BASE_DELAY_MS, 30000, 1000, 3600000),
+
+        maxDelayMs: boundedInt(process.env.EMAIL_OUTBOX_MAX_DELAY_MS, 3600000, 1000, 86400000),
+
+        leaseMs: boundedInt(process.env.EMAIL_OUTBOX_LEASE_MS, 300000, 10000, 3600000),
 
     },
 

@@ -133,6 +133,68 @@ const userSchema = new mongoose.Schema(
                 maxlength: [500, "Description cannot exceed 500 characters"],
             },
         },
+
+        /**
+         * Notification delivery preferences, keyed by NOTIFICATION_CATEGORY.
+         *
+         * Backward compatibility: every field carries a schema default, so
+         * existing user documents that were created before this field existed
+         * read back with the intended defaults without any migration or
+         * backfill. Mongoose applies defaults on document initialization.
+         *
+         * Defaults follow the agreed product direction: essential operational
+         * notifications are enabled, optional marketing is disabled.
+         *
+         * NOTE: these preferences are stored only. Enforcement happens at
+         * delivery time, which is out of scope for the persistence phase.
+         * Mandatory categories (see MANDATORY_EMAIL_CATEGORIES /
+         * MANDATORY_IN_APP_CATEGORIES) must ignore these flags when delivery
+         * is implemented.
+         *
+         * No SMS preference is defined — no SMS infrastructure exists.
+         */
+        notificationPreferences: {
+            booking: {
+                inApp: { type: Boolean, default: true },
+                email: { type: Boolean, default: true },
+            },
+            consultation: {
+                inApp: { type: Boolean, default: true },
+                email: { type: Boolean, default: true },
+            },
+            payment: {
+                inApp: { type: Boolean, default: true },
+                email: { type: Boolean, default: true },
+            },
+            refund: {
+                inApp: { type: Boolean, default: true },
+                email: { type: Boolean, default: true },
+            },
+            earning: {
+                inApp: { type: Boolean, default: true },
+                email: { type: Boolean, default: false },
+            },
+            payout: {
+                inApp: { type: Boolean, default: true },
+                email: { type: Boolean, default: true },
+            },
+            review: {
+                inApp: { type: Boolean, default: true },
+                email: { type: Boolean, default: false },
+            },
+            account: {
+                inApp: { type: Boolean, default: true },
+                email: { type: Boolean, default: true },
+            },
+            admin: {
+                inApp: { type: Boolean, default: true },
+                email: { type: Boolean, default: true },
+            },
+            marketing: {
+                inApp: { type: Boolean, default: false },
+                email: { type: Boolean, default: false },
+            },
+        },
     },
     {
         timestamps: true,

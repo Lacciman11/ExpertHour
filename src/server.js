@@ -10,6 +10,7 @@ import refundReconciliationService from "./services/refund-reconciliation.servic
 import payoutProcessingService from "./services/payout-processing.service.js";
 import payoutReconciliationService from "./services/payout-reconciliation.service.js";
 import googleMeetAttendanceWorker from "./services/google-meet-attendance.worker.js";
+import emailOutboxWorker from "./services/email-outbox.worker.js";
 
 import env from "./config/env.js";
 import paymentLogger from "./utils/logger.js";
@@ -80,6 +81,9 @@ function startWorkers() {
     // Google Meet attendance sync worker: synchronizes Google Meet attendance
     googleMeetAttendanceWorker.start();
 
+    // Email outbox worker: durable, retryable email delivery
+    emailOutboxWorker.start();
+
     paymentLogger.info("workers_started", {
 
         event: "workers_started",
@@ -111,6 +115,7 @@ async function gracefulShutdown(signal) {
     payoutProcessingService.stop();
     payoutReconciliationService.stop();
     googleMeetAttendanceWorker.stop();
+    emailOutboxWorker.stop();
 
     // Close HTTP server
     if (server) {
