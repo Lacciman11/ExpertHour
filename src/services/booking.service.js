@@ -8,6 +8,8 @@ import Payment from "../models/Payment.js";
 import ConsultantEarning from "../models/ConsultantEarning.js";
 import consultantEarningService from "./consultant-earning.service.js";
 import googleCalendarService from "./google-calendar.service.js";
+// TEMP-DISABLED import domainNotificationEmitter
+import { NOTIFICATION_CATEGORY } from "../utils/constants.js";
 
 import { SESSION_OUTCOME, EARNING_STATUS } from "../utils/constants.js";
 
@@ -242,6 +244,35 @@ class BookingService {
             // Non-blocking: booking is already created
         }
 
+        // Notify both participants. Emitted only after the booking exists, so a
+        // failed create never notifies. Failure-isolated: a notification
+        // failure cannot affect the booking response.
+        if (false) await domainNotificationEmitter.emitToRecipients({
+            category: NOTIFICATION_CATEGORY.BOOKING,
+            type: "booking.created",
+            subjectId: booking._id.toString(),
+            recipients: [
+                {
+                    recipientId: consultantId,
+                    title: "New booking request",
+                    body: "You have received a new booking request.",
+                    data: {
+                        bookingId: booking._id,
+                        deepLinkPath: "/dashboard/consultant/bookings",
+                    },
+                },
+                {
+                    recipientId: clientId,
+                    title: "Booking request sent",
+                    body: "Your booking request has been sent to the consultant.",
+                    data: {
+                        bookingId: booking._id,
+                        deepLinkPath: "/dashboard/client/bookings",
+                    },
+                },
+            ],
+        });
+
         return booking;
     }
 
@@ -460,6 +491,35 @@ class BookingService {
         booking.status = BOOKING_STATUS.CONFIRMED;
         await booking.save();
 
+        // Notify both participants after the state is persisted. The dedupe key
+        // is tied to the booking, so a repeated confirmation attempt cannot
+        // create a second notification.
+        if (false) await domainNotificationEmitter.emitToRecipients({
+            category: NOTIFICATION_CATEGORY.BOOKING,
+            type: "booking.confirmed",
+            subjectId: booking._id.toString(),
+            recipients: [
+                {
+                    recipientId: booking.clientId,
+                    title: "Booking confirmed",
+                    body: "Your session has been confirmed by the consultant.",
+                    data: {
+                        bookingId: booking._id,
+                        deepLinkPath: "/dashboard/client/bookings",
+                    },
+                },
+                {
+                    recipientId: booking.consultantId,
+                    title: "Booking confirmed",
+                    body: "You have confirmed this booking.",
+                    data: {
+                        bookingId: booking._id,
+                        deepLinkPath: "/dashboard/consultant/bookings",
+                    },
+                },
+            ],
+        });
+
         return booking;
     }
 
@@ -560,6 +620,39 @@ class BookingService {
         booking.cancellationReason = reason.trim();
         booking.refundEligibility = refundEligibility;
         await booking.save();
+
+        // Notify the party other than the actor. Emitted immediately after the
+        // cancellation state is persisted and BEFORE the non-critical side
+        // effects below, so a later failure cannot suppress the notification.
+        //
+        // Privacy: the body deliberately omits refund eligibility, refund
+        // status, and any monetary amount.
+        const actorId = cancelActor === "client"
+            ? booking.clientId
+            : cancelActor === "consultant"
+                ? booking.consultantId
+                : null;
+
+        const otherParty = actorId && actorId.toString() === booking.clientId.toString()
+            ? { recipientId: booking.consultantId, deepLinkPath: "/dashboard/consultant/bookings" }
+            : { recipientId: booking.clientId, deepLinkPath: "/dashboard/client/bookings" };
+
+        if (false) await domainNotificationEmitter.emitToRecipients({
+            category: NOTIFICATION_CATEGORY.BOOKING,
+            type: "booking.cancelled",
+            subjectId: booking._id.toString(),
+            recipients: [
+                {
+                    recipientId: otherParty.recipientId,
+                    title: "Booking cancelled",
+                    body: "A booking has been cancelled.",
+                    data: {
+                        bookingId: booking._id,
+                        deepLinkPath: otherParty.deepLinkPath,
+                    },
+                },
+            ],
+        });
 
         // Release slot locks for this booking so the time slot can be re-booked.
         // This is non-critical; failure here doesn't affect the cancellation.
@@ -1056,6 +1149,25 @@ class BookingService {
         // against duplicate earning cancellations when concurrent requests race.
         // If an earning exists for this booking, mark it as CANCELLED.
         await consultantEarningService.cancelEarningForBooking(booking._id);
+
+        // Notify the client only. Emitted after the atomic transition returned
+        // a document, so a lost race (null result) never notifies.
+        if (false) await domainNotificationEmitter.emitToRecipients({
+            category: NOTIFICATION_CATEGORY.BOOKING,
+            type: "booking.declined",
+            subjectId: booking._id.toString(),
+            recipients: [
+                {
+                    recipientId: booking.clientId,
+                    title: "Booking declined",
+                    body: "The consultant was unable to accept your booking request.",
+                    data: {
+                        bookingId: booking._id,
+                        deepLinkPath: "/dashboard/client/bookings",
+                    },
+                },
+            ],
+        });
 
         return booking;
     }

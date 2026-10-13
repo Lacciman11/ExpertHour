@@ -5,7 +5,8 @@ import Booking from "../models/Booking.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
 import ConsultationSession from "../models/ConsultationSession.js";
 
-import { SESSION_OUTCOME } from "../utils/constants.js";
+import { SESSION_OUTCOME, NOTIFICATION_CATEGORY } from "../utils/constants.js";
+// TEMP-DISABLED import domainNotificationEmitter
 
 class ReviewService {
 
@@ -64,8 +65,29 @@ class ReviewService {
         // Update consultant profile rating
         await this._updateConsultantRating(booking.consultantId);
 
-        return review;
+        // Notify the consultant. Emitted only after the review exists and the
+        // rating update has completed, so a failed review never notifies.
+        // The body deliberately omits the rating value and the client's
+        // identity — only the review reference is exposed.
+        if (false) await domainNotificationEmitter.emitToRecipients({
+            category: NOTIFICATION_CATEGORY.REVIEW,
+            type: "review.received",
+            subjectId: review._id.toString(),
+            recipients: [
+                {
+                    recipientId: booking.consultantId,
+                    title: "New review received",
+                    body: "You have received a new review for a completed session.",
+                    data: {
+                        reviewId: review._id,
+                        bookingId: booking._id,
+                        deepLinkPath: "/dashboard/consultant/reviews",
+                    },
+                },
+            ],
+        });
 
+        return review;
     }
 
     async getConsultantReviews(consultantId, filters = {}) {

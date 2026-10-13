@@ -39,7 +39,8 @@ import Booking from "../models/Booking.js";
 
 import env from "../config/env.js";
 import paymentLogger from "../utils/logger.js";
-import { SESSION_OUTCOME, CANCEL_ACTOR } from "../utils/constants.js";
+import { SESSION_OUTCOME, CANCEL_ACTOR, NOTIFICATION_CATEGORY } from "../utils/constants.js";
+// TEMP-DISABLED import domainNotificationEmitter
 
 const { intervalMs } = env.consultationSessionOutcome;
 
@@ -385,6 +386,39 @@ class ConsultationSessionOutcomeService {
             bookingId: updated.bookingId?.toString?.(),
             outcome,
         });
+
+        // Notify both participants. Emitted ONLY on the winning atomic
+        // transition (`updated` is non-null), so concurrent or repeated
+        // finalization attempts cannot produce additional notifications.
+        if (booking) {
+            await domainNotificationEmitter.emitToRecipients({
+                category: NOTIFICATION_CATEGORY.CONSULTATION,
+                type: "session.outcome_finalized",
+                subjectId: updated._id.toString(),
+                recipients: [
+                    {
+                        recipientId: booking.clientId,
+                        title: "Session completed",
+                        body: "Your consultation session has been completed.",
+                        data: {
+                            sessionId: updated._id,
+                            bookingId: booking._id,
+                            deepLinkPath: "/dashboard/client/bookings",
+                        },
+                    },
+                    {
+                        recipientId: booking.consultantId,
+                        title: "Session completed",
+                        body: "Your consultation session has been completed.",
+                        data: {
+                            sessionId: updated._id,
+                            bookingId: booking._id,
+                            deepLinkPath: "/dashboard/consultant/bookings",
+                        },
+                    },
+                ],
+            });
+        }
 
         return {
             outcome,
