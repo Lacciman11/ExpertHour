@@ -3,11 +3,16 @@ import mongoose from "mongoose";
 import Payment from "../models/Payment.js";
 import Booking from "../models/Booking.js";
 import ConsultantEarning from "../models/ConsultantEarning.js";
+import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
 import paymentLogger from "../utils/logger.js";
+import domainNotificationEmitter from "./domain-notification.emitter.js";
+import emailOutboxService from "./email-outbox.service.js";
 import {
     EARNING_STATUS,
     ADJUSTMENT_REASON,
+    NOTIFICATION_CATEGORY,
+    EMAIL_TEMPLATE_ID,
 } from "../utils/constants.js";
 import { paystackClient } from "./payment.service.js";
 
@@ -394,6 +399,100 @@ async function processRecovery({
 // ---------------------------------------------------------------------------
 
 class RefundService {
+
+    /**
+     * Emit a failure-isolated in-app notification to the client about the
+     * outcome of their refund. In-app only; no email/outbox side effects.
+     *
+     * Privacy: the title/body never include the refund amount, the refund
+     * reference, or any payment reference. Only safe ids and an allowed deep
+     * link are attached. The consultant is never notified about refund status.
+     *
+     * @param {object} payment - Payment document (needs clientId, _id, bookingId)
+     * @param {"completed"|"failed"} outcome
+     * @private
+     */
+    async _notifyClientRefund(payment, outcome) {
+        if (!payment || !payment.clientId) {
+            return;
+        }
+
+        const isFailed = outcome === "failed";
+
+        await domainNotificationEmitter.emitToRecipients({
+            category: NOTIFICATION_CATEGORY.REFUND,
+            type: isFailed ? "refund.failed" : "refund.completed",
+            subjectId: payment._id.toString(),
+            recipients: [
+                {
+                    recipientId: payment.clientId,
+                    title: isFailed ? "Refund failed" : "Refund completed",
+                    body: isFailed
+                        ? "We were unable to complete your refund. Please contact support for assistance."
+                        : "Your refund has been completed and returned to your original payment method.",
+                    data: {
+                        paymentId: payment._id,
+                        bookingId: payment.bookingId,
+                        deepLinkPath: "/dashboard/client/bookings",
+                    },
+                },
+            ],
+        });
+    }
+
+    /**
+     * Enqueue a refund-outcome email (completed/failed) to the client via the
+     * durable email outbox. Non-critical post-commit side effect: the account
+     * lookup and enqueue are fully isolated so a failure can never reverse the
+     * committed refund outcome or suppress the in-app notification.
+     *
+     * Privacy: the recipient is the client who owns the payment
+     * (payment.clientId) and the destination is User.email — never googleEmail.
+     * No amount, reason, or reconciliation detail is included. Only safe
+     * identifiers and error.message are logged.
+     *
+     * @param {object} payment - Payment document (needs clientId, _id)
+     * @param {"completed"|"failed"} outcome
+     * @private
+     */
+    async _enqueueRefundOutcomeEmail(payment, outcome) {
+        try {
+            if (!payment || !payment.clientId) {
+                return;
+            }
+
+            const user = await User.findById(payment.clientId);
+
+            // Skip silently when the account user or email is unavailable.
+            if (!user || !user.email) {
+                return;
+            }
+
+            const isFailed = outcome === "failed";
+            const templateId = isFailed
+                ? EMAIL_TEMPLATE_ID.REFUND_FAILED
+                : EMAIL_TEMPLATE_ID.REFUND_COMPLETED;
+
+            await emailOutboxService.enqueue({
+                recipientId: payment.clientId,
+                to: user.email,
+                category: NOTIFICATION_CATEGORY.REFUND,
+                templateId,
+                templateData: { firstName: user.firstName },
+                dedupeKey: emailOutboxService.buildDedupeKey(
+                    templateId,
+                    payment.clientId.toString(),
+                    payment._id.toString()
+                ),
+            });
+        } catch (error) {
+            paymentLogger.error(`refund_${outcome}_email_enqueue_failed`, {
+                event: `refund_${outcome}_email_enqueue_failed`,
+                paymentId: payment?._id?.toString(),
+                error: error?.message || error,
+            });
+        }
+    }
 
     /**
      * Process a refund for a payment.
@@ -872,6 +971,14 @@ class RefundService {
                 };
             });
 
+            // Post-commit: notify the client when the refund is fully completed.
+            // Emitted only after the transaction commits, never inside it. The
+            // per-payment dedupe key makes a later reconciliation idempotent.
+            if (result && result.payment && result.payment.refundStatus === "completed") {
+                await this._notifyClientRefund(result.payment, "completed");
+                await this._enqueueRefundOutcomeEmail(result.payment, "completed");
+            }
+
             return result;
         } catch (error) {
             // Re-throw ApiError instances
@@ -975,6 +1082,12 @@ class RefundService {
         if (paystackRefundStatus === "failed") {
             payment.refundStatus = "failed";
             await payment.save();
+
+            // Post-determination: notify the client their refund failed. The
+            // per-payment dedupe key keeps this idempotent across re-runs.
+            await this._notifyClientRefund(payment, "failed");
+            await this._enqueueRefundOutcomeEmail(payment, "failed");
+
             return {
                 success: true,
                 reconciled: false,
@@ -1124,6 +1237,13 @@ class RefundService {
                     booking: bookingInTx,
                 };
             });
+
+            // Post-commit: notify the client when the refund is fully completed.
+            // Emitted only after the transaction commits, never inside it.
+            if (result && result.payment && result.payment.refundStatus === "completed") {
+                await this._notifyClientRefund(result.payment, "completed");
+                await this._enqueueRefundOutcomeEmail(result.payment, "completed");
+            }
 
             return {
                 success: true,

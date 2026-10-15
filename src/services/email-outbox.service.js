@@ -18,6 +18,11 @@ import {
     paymentSuccessTemplate,
     verifyEmailTemplate,
 } from "./email/index.js";
+// Namespace import for the consultant decision templates. Existing test suites
+// mock "./email/index.js" with only the original templates; a namespace import
+// resolves a missing export to `undefined` (no link error) instead of breaking
+// those suites, while the real module provides both renderers in production.
+import * as emailTemplates from "./email/index.js";
 import notificationService from "./notification.service.js";
 
 /**
@@ -128,6 +133,94 @@ const TEMPLATE_REGISTRY = Object.freeze({
         render: paymentFailureConsultantTemplate,
         allowedKeys: ["consultantName", "clientName", "date", "time", "reason"],
         forbiddenKeys: ["amount", "reference"],
+    },
+
+    [EMAIL_TEMPLATE_ID.CONSULTANT_APPROVAL]: {
+        render: emailTemplates.consultantApprovalTemplate,
+        allowedKeys: ["firstName"],
+        forbiddenKeys: [],
+    },
+
+    [EMAIL_TEMPLATE_ID.CONSULTANT_REJECTION]: {
+        render: emailTemplates.consultantRejectionTemplate,
+        allowedKeys: ["firstName"],
+        forbiddenKeys: [],
+    },
+
+    [EMAIL_TEMPLATE_ID.BOOKING_CANCELLED]: {
+        render: emailTemplates.bookingCancelledTemplate,
+        allowedKeys: ["firstName"],
+        forbiddenKeys: [],
+    },
+
+    [EMAIL_TEMPLATE_ID.BOOKING_DECLINED]: {
+        render: emailTemplates.bookingDeclinedTemplate,
+        allowedKeys: ["firstName"],
+        forbiddenKeys: [],
+    },
+
+    [EMAIL_TEMPLATE_ID.REFUND_COMPLETED]: {
+        render: emailTemplates.refundCompletedTemplate,
+        allowedKeys: ["firstName"],
+        forbiddenKeys: [],
+    },
+
+    [EMAIL_TEMPLATE_ID.REFUND_FAILED]: {
+        render: emailTemplates.refundFailedTemplate,
+        allowedKeys: ["firstName"],
+        forbiddenKeys: [],
+    },
+
+    [EMAIL_TEMPLATE_ID.PAYOUT_COMPLETED]: {
+        render: emailTemplates.payoutCompletedTemplate,
+        allowedKeys: ["firstName"],
+        forbiddenKeys: [],
+    },
+
+    [EMAIL_TEMPLATE_ID.PAYOUT_FAILED]: {
+        render: emailTemplates.payoutFailedTemplate,
+        allowedKeys: ["firstName"],
+        forbiddenKeys: [],
+    },
+
+    [EMAIL_TEMPLATE_ID.SESSION_COMPLETED]: {
+        render: emailTemplates.sessionCompletedTemplate,
+        allowedKeys: ["firstName"],
+        forbiddenKeys: [],
+    },
+
+    [EMAIL_TEMPLATE_ID.REVIEW_RECEIVED]: {
+        render: emailTemplates.reviewReceivedTemplate,
+        allowedKeys: ["firstName"],
+        forbiddenKeys: [],
+    },
+
+    [EMAIL_TEMPLATE_ID.EARNING_CANCELLED]: {
+        render: emailTemplates.earningCancelledTemplate,
+        allowedKeys: ["firstName"],
+        forbiddenKeys: [],
+    },
+
+    // Booking reminders: one shared renderer, two IDs so the 24-hour and
+    // 1-hour reminders get distinct dedupe keys.
+    [EMAIL_TEMPLATE_ID.BOOKING_REMINDER_24H]: {
+        render: emailTemplates.bookingReminderTemplate,
+        allowedKeys: ["firstName", "reminderLabel"],
+        forbiddenKeys: [],
+    },
+
+    [EMAIL_TEMPLATE_ID.BOOKING_REMINDER_1H]: {
+        render: emailTemplates.bookingReminderTemplate,
+        allowedKeys: ["firstName", "reminderLabel"],
+        forbiddenKeys: [],
+    },
+
+    // Review request: client-facing, no consultant identity, no rating, no
+    // review text, no financial data.
+    [EMAIL_TEMPLATE_ID.REVIEW_REQUEST]: {
+        render: emailTemplates.reviewRequestTemplate,
+        allowedKeys: ["firstName"],
+        forbiddenKeys: [],
     },
 });
 
@@ -992,6 +1085,48 @@ class EmailOutboxService {
 
             case EMAIL_TEMPLATE_ID.PAYMENT_FAILURE_CONSULTANT:
                 return "Booking Payment Failed";
+
+            case EMAIL_TEMPLATE_ID.CONSULTANT_APPROVAL:
+                return "Your ExpertHour consultant account is approved";
+
+            case EMAIL_TEMPLATE_ID.CONSULTANT_REJECTION:
+                return "Update on your ExpertHour consultant application";
+
+            case EMAIL_TEMPLATE_ID.BOOKING_CANCELLED:
+                return "Your ExpertHour booking was cancelled";
+
+            case EMAIL_TEMPLATE_ID.BOOKING_DECLINED:
+                return "Update on your ExpertHour booking request";
+
+            case EMAIL_TEMPLATE_ID.REFUND_COMPLETED:
+                return "Your ExpertHour refund is complete";
+
+            case EMAIL_TEMPLATE_ID.REFUND_FAILED:
+                return "Update on your ExpertHour refund";
+
+            case EMAIL_TEMPLATE_ID.PAYOUT_COMPLETED:
+                return "Your ExpertHour payout is complete";
+
+            case EMAIL_TEMPLATE_ID.PAYOUT_FAILED:
+                return "Update on your ExpertHour payout";
+
+            case EMAIL_TEMPLATE_ID.SESSION_COMPLETED:
+                return "Your ExpertHour session is complete";
+
+            case EMAIL_TEMPLATE_ID.REVIEW_RECEIVED:
+                return "You have a new ExpertHour review";
+
+            case EMAIL_TEMPLATE_ID.EARNING_CANCELLED:
+                return "Update on an ExpertHour earning";
+
+            case EMAIL_TEMPLATE_ID.BOOKING_REMINDER_24H:
+                return "Your ExpertHour session starts in 24 hours";
+
+            case EMAIL_TEMPLATE_ID.BOOKING_REMINDER_1H:
+                return "Your ExpertHour session starts in 1 hour";
+
+            case EMAIL_TEMPLATE_ID.REVIEW_REQUEST:
+                return "Please review your ExpertHour session";
 
             default:
                 throw new ApiError(400, "Unsupported email template ID");

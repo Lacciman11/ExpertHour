@@ -36,11 +36,13 @@ import mongoose from "mongoose";
 
 import ConsultationSession from "../models/ConsultationSession.js";
 import Booking from "../models/Booking.js";
+import User from "../models/User.js";
 
 import env from "../config/env.js";
 import paymentLogger from "../utils/logger.js";
-import { SESSION_OUTCOME, CANCEL_ACTOR, NOTIFICATION_CATEGORY } from "../utils/constants.js";
-// TEMP-DISABLED import domainNotificationEmitter
+import { SESSION_OUTCOME, CANCEL_ACTOR, NOTIFICATION_CATEGORY, EMAIL_TEMPLATE_ID } from "../utils/constants.js";
+import domainNotificationEmitter from "./domain-notification.emitter.js";
+import emailOutboxService from "./email-outbox.service.js";
 
 const { intervalMs } = env.consultationSessionOutcome;
 
@@ -260,6 +262,49 @@ class ConsultationSessionOutcomeService {
     // -------------------------------------------------------------------
 
     /**
+     * Enqueue a session-completed email to one participant via the durable
+     * email outbox. Non-critical post-commit side effect: the account lookup
+     * and enqueue are fully isolated so a failure can never reverse the
+     * committed outcome or suppress the in-app notification.
+     *
+     * Privacy: the recipient is a User id and the destination is User.email —
+     * never a profile id or googleEmail. Only safe identifiers and
+     * error.message are logged.
+     *
+     * @param {string|object} recipientUserId - the participant's User id
+     * @param {string|object} sessionId - the session id (dedupe subject)
+     * @private
+     */
+    async _enqueueSessionCompletedEmail(recipientUserId, sessionId) {
+        try {
+            const user = await User.findById(recipientUserId);
+
+            if (!user || !user.email) {
+                return;
+            }
+
+            await emailOutboxService.enqueue({
+                recipientId: recipientUserId,
+                to: user.email,
+                category: NOTIFICATION_CATEGORY.CONSULTATION,
+                templateId: EMAIL_TEMPLATE_ID.SESSION_COMPLETED,
+                templateData: { firstName: user.firstName },
+                dedupeKey: emailOutboxService.buildDedupeKey(
+                    EMAIL_TEMPLATE_ID.SESSION_COMPLETED,
+                    recipientUserId.toString(),
+                    sessionId.toString()
+                ),
+            });
+        } catch (error) {
+            paymentLogger.error("session_completed_email_enqueue_failed", {
+                event: "session_completed_email_enqueue_failed",
+                sessionId: sessionId.toString(),
+                error: error?.message || error,
+            });
+        }
+    }
+
+    /**
      * Reconcile attendance, compute the deterministic outcome, and atomically
      * finalize it. Idempotent: if the session already has an outcome, returns
      * the existing outcome without modification.
@@ -418,6 +463,14 @@ class ConsultationSessionOutcomeService {
                     },
                 ],
             });
+
+            // Email only for a genuinely COMPLETED outcome (not a no-show,
+            // cancellation, or other terminal outcome). Post-commit, post-in-app;
+            // fully isolated per recipient.
+            if (outcome === SESSION_OUTCOME.COMPLETED) {
+                await this._enqueueSessionCompletedEmail(booking.clientId, updated._id);
+                await this._enqueueSessionCompletedEmail(booking.consultantId, updated._id);
+            }
         }
 
         return {

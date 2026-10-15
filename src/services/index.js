@@ -28,6 +28,8 @@ import sessionService from "./session.service.js";
 import notificationService from "./notification.service.js";
 import emailOutboxService from "./email-outbox.service.js";
 import emailOutboxWorker from "./email-outbox.worker.js";
+import bookingReminderService from "./booking-reminder.service.js";
+import reviewRequestService from "./review-request.service.js";
 
 const resetPasswordService = passwordResetService;
 const passwordResetTokenService = passwordResetService;
@@ -66,4 +68,6 @@ export {
     notificationService,
     emailOutboxService,
     emailOutboxWorker,
+    bookingReminderService,
+    reviewRequestService,
 };

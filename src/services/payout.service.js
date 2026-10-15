@@ -3,13 +3,18 @@ import mongoose from "mongoose";
 import Payout from "../models/Payout.js";
 import ConsultantEarning from "../models/ConsultantEarning.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
+import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
 import paymentLogger from "../utils/logger.js";
+import domainNotificationEmitter from "./domain-notification.emitter.js";
+import emailOutboxService from "./email-outbox.service.js";
 import {
     EARNING_STATUS,
     PAYOUT_STATUS,
     HOLD_REASON,
     MINIMUM_PAYOUT_KOBO,
+    NOTIFICATION_CATEGORY,
+    EMAIL_TEMPLATE_ID,
 } from "../utils/constants.js";
 import { initiateTransfer } from "../services/paystack-transfer.service.js";
 
@@ -655,11 +660,65 @@ class PayoutService {
      * @returns {Promise<object>} The updated payout
      * @throws {ApiError} If payout not found or not in PROCESSING status
      */
+    /**
+     * Enqueue a payout-outcome email (completed/failed) to the consultant via
+     * the durable email outbox. Non-critical post-commit side effect: the
+     * account lookup and enqueue are fully isolated so a failure can never
+     * reverse the committed payout or suppress the in-app notification.
+     *
+     * Privacy: the recipient is the consultant who owns the payout
+     * (payout.consultantId) and the destination is User.email — never a profile
+     * id or googleEmail. No amount, bank detail, or provider response is
+     * included. Only safe identifiers and error.message are logged.
+     *
+     * @param {object} payout - Payout document (needs consultantId, _id)
+     * @param {"completed"|"failed"} outcome
+     * @private
+     */
+    async _enqueuePayoutOutcomeEmail(payout, outcome) {
+        try {
+            if (!payout || !payout.consultantId) {
+                return;
+            }
+
+            const user = await User.findById(payout.consultantId);
+
+            // Skip silently when the account user or email is unavailable.
+            if (!user || !user.email) {
+                return;
+            }
+
+            const isFailed = outcome === "failed";
+            const templateId = isFailed
+                ? EMAIL_TEMPLATE_ID.PAYOUT_FAILED
+                : EMAIL_TEMPLATE_ID.PAYOUT_COMPLETED;
+
+            await emailOutboxService.enqueue({
+                recipientId: payout.consultantId,
+                to: user.email,
+                category: NOTIFICATION_CATEGORY.PAYOUT,
+                templateId,
+                templateData: { firstName: user.firstName },
+                dedupeKey: emailOutboxService.buildDedupeKey(
+                    templateId,
+                    payout.consultantId.toString(),
+                    payout._id.toString()
+                ),
+            });
+        } catch (error) {
+            paymentLogger.error(`payout_${outcome}_email_enqueue_failed`, {
+                event: `payout_${outcome}_email_enqueue_failed`,
+                payoutId: payout?._id?.toString(),
+                error: error?.message || error,
+            });
+        }
+    }
+
     async markPayoutAsCompleted(payoutId) {
         const mongoSession = await mongoose.startSession();
 
         try {
-            return await mongoSession.withTransaction(async () => {
+            const completedPayout = await mongoSession.withTransaction(async () => {
                 const payout = await Payout.findById(payoutId).session(mongoSession);
 
                 if (!payout) {
@@ -711,6 +770,34 @@ class PayoutService {
 
                 return payout;
             });
+
+            // Post-commit: notify the consultant. Emitted only after the
+            // authoritative COMPLETED transition commits — never inside the
+            // transaction. Failure-isolated by the emitter, so a notification
+            // error cannot affect the committed payout.
+            await domainNotificationEmitter.emitToRecipients({
+                category: NOTIFICATION_CATEGORY.PAYOUT,
+                type: "payout.completed",
+                subjectId: completedPayout._id.toString(),
+                recipients: [
+                    {
+                        recipientId: completedPayout.consultantId,
+                        title: "Payout completed",
+                        body: "Your payout has been completed.",
+                        data: {
+                            payoutId: completedPayout._id,
+                            deepLinkPath: "/dashboard/consultant/earnings",
+                        },
+                    },
+                ],
+            });
+
+            // Post-commit, post-in-app side effect: email the consultant.
+            // Fully isolated; cannot reverse the committed payout or suppress
+            // the in-app notification above.
+            await this._enqueuePayoutOutcomeEmail(completedPayout, "completed");
+
+            return completedPayout;
         } finally {
             mongoSession.endSession();
         }
@@ -728,7 +815,7 @@ class PayoutService {
         const mongoSession = await mongoose.startSession();
 
         try {
-            return await mongoSession.withTransaction(async () => {
+            const failedPayout = await mongoSession.withTransaction(async () => {
                 const payout = await Payout.findById(payoutId).session(mongoSession);
 
                 if (!payout) {
@@ -778,6 +865,34 @@ class PayoutService {
 
                 return payout;
             });
+
+            // Post-commit: notify the consultant. Emitted only after the
+            // authoritative FAILED transition commits — never inside the
+            // transaction. The per-payout dedupe key means a retry that fails
+            // again does not create a second logical notification.
+            await domainNotificationEmitter.emitToRecipients({
+                category: NOTIFICATION_CATEGORY.PAYOUT,
+                type: "payout.failed",
+                subjectId: failedPayout._id.toString(),
+                recipients: [
+                    {
+                        recipientId: failedPayout.consultantId,
+                        title: "Payout failed",
+                        body: "We could not complete your payout. It will be retried automatically.",
+                        data: {
+                            payoutId: failedPayout._id,
+                            deepLinkPath: "/dashboard/consultant/earnings",
+                        },
+                    },
+                ],
+            });
+
+            // Post-commit, post-in-app side effect: email the consultant.
+            // Fully isolated; the per-payout dedupe key means a retry that
+            // fails again does not create a second logical email.
+            await this._enqueuePayoutOutcomeEmail(failedPayout, "failed");
+
+            return failedPayout;
         } finally {
             mongoSession.endSession();
         }

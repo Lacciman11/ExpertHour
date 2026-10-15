@@ -4,11 +4,57 @@ import Review from "../models/Review.js";
 import Booking from "../models/Booking.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
 import ConsultationSession from "../models/ConsultationSession.js";
-
-import { SESSION_OUTCOME, NOTIFICATION_CATEGORY } from "../utils/constants.js";
-// TEMP-DISABLED import domainNotificationEmitter
+import User from "../models/User.js";
+import paymentLogger from "../utils/logger.js";
+import { SESSION_OUTCOME, NOTIFICATION_CATEGORY, EMAIL_TEMPLATE_ID } from "../utils/constants.js";
+import domainNotificationEmitter from "./domain-notification.emitter.js";
+import emailOutboxService from "./email-outbox.service.js";
 
 class ReviewService {
+
+    /**
+     * Enqueue a review-received email to the consultant via the durable email
+     * outbox. Non-critical post-commit side effect: the account lookup and
+     * enqueue are fully isolated so a failure can never reverse the committed
+     * review or suppress the in-app notification.
+     *
+     * Privacy: the recipient is the consultant's User id and the destination is
+     * User.email — never a profile id or googleEmail. The payload carries only
+     * firstName (no rating, review text, or client identity). Only safe
+     * identifiers and error.message are logged.
+     *
+     * @param {string|object} consultantUserId - the consultant's User id
+     * @param {string|object} reviewId - the review id (dedupe subject)
+     * @private
+     */
+    async _enqueueReviewReceivedEmail(consultantUserId, reviewId) {
+        try {
+            const user = await User.findById(consultantUserId);
+
+            if (!user || !user.email) {
+                return;
+            }
+
+            await emailOutboxService.enqueue({
+                recipientId: consultantUserId,
+                to: user.email,
+                category: NOTIFICATION_CATEGORY.REVIEW,
+                templateId: EMAIL_TEMPLATE_ID.REVIEW_RECEIVED,
+                templateData: { firstName: user.firstName },
+                dedupeKey: emailOutboxService.buildDedupeKey(
+                    EMAIL_TEMPLATE_ID.REVIEW_RECEIVED,
+                    consultantUserId.toString(),
+                    reviewId.toString()
+                ),
+            });
+        } catch (error) {
+            paymentLogger.error("review_received_email_enqueue_failed", {
+                event: "review_received_email_enqueue_failed",
+                reviewId: reviewId.toString(),
+                error: error?.message || error,
+            });
+        }
+    }
 
     async createReview(clientId, data) {
 
@@ -69,7 +115,7 @@ class ReviewService {
         // rating update has completed, so a failed review never notifies.
         // The body deliberately omits the rating value and the client's
         // identity — only the review reference is exposed.
-        if (false) await domainNotificationEmitter.emitToRecipients({
+        await domainNotificationEmitter.emitToRecipients({
             category: NOTIFICATION_CATEGORY.REVIEW,
             type: "review.received",
             subjectId: review._id.toString(),
@@ -86,6 +132,12 @@ class ReviewService {
                 },
             ],
         });
+
+        // Post-commit, post-in-app side effect: email the consultant. Fully
+        // isolated; cannot reverse the committed review or suppress the in-app
+        // notification above. The payload carries no rating, review text, or
+        // client identity.
+        await this._enqueueReviewReceivedEmail(booking.consultantId, review._id);
 
         return review;
     }

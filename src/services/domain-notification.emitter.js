@@ -1,4 +1,5 @@
 import notificationService from "./notification.service.js";
+import notificationRealtime from "../realtime/notification.socket.js";
 import paymentLogger from "../utils/logger.js";
 
 /**
@@ -35,6 +36,10 @@ import paymentLogger from "../utils/logger.js";
  * @param {object} [params.data] - safe references / deep link
  * @returns {Promise<{ok: boolean, created: boolean}>}
  * @private
+ *
+ * On a genuinely new record this also emits a minimal Socket.IO event to the
+ * recipient's private room (Phase 3B.7). The event is a cache-invalidation
+ * signal only; the database remains the source of truth.
  */
 async function emitOne({
     recipientId,
@@ -55,6 +60,31 @@ async function emitOne({
             dedupeKey,
             data,
         });
+
+        // Real-time announcement. Emitted ONLY after persistence succeeded and
+        // ONLY when a genuinely new record was created, so a duplicate
+        // dedupeKey never produces a second client-visible event. The payload
+        // is a minimal signal; the client refetches authoritative data from
+        // the notification API.
+        //
+        // Best-effort and doubly isolated: the realtime module swallows its
+        // own failures, and this narrow try/catch guarantees that even an
+        // unexpected throw can never turn a successful persist into a
+        // reported failure or undo the persisted record.
+        if (result.created && result.notification) {
+            try {
+                notificationRealtime.emitNotificationCreated(
+                    recipientId,
+                    result.notification._id
+                );
+            } catch (realtimeError) {
+                paymentLogger.error("domain_notification_realtime_failed", {
+                    event: "domain_notification_realtime_failed",
+                    notificationType: type,
+                    error: realtimeError?.message || realtimeError,
+                });
+            }
+        }
 
         return { ok: true, created: result.created };
 

@@ -8,8 +8,10 @@ import Payment from "../models/Payment.js";
 import ConsultantEarning from "../models/ConsultantEarning.js";
 import consultantEarningService from "./consultant-earning.service.js";
 import googleCalendarService from "./google-calendar.service.js";
-// TEMP-DISABLED import domainNotificationEmitter
-import { NOTIFICATION_CATEGORY } from "../utils/constants.js";
+import domainNotificationEmitter from "./domain-notification.emitter.js";
+import emailOutboxService from "./email-outbox.service.js";
+import paymentLogger from "../utils/logger.js";
+import { NOTIFICATION_CATEGORY, EMAIL_TEMPLATE_ID } from "../utils/constants.js";
 
 import { SESSION_OUTCOME, EARNING_STATUS } from "../utils/constants.js";
 
@@ -32,6 +34,52 @@ import ApiError from "../utils/ApiError.js";
  */
 
 class BookingService {
+
+    /**
+     * Enqueue a booking-outcome email (cancellation/decline) via the durable
+     * email outbox. Non-critical post-commit side effect: the account lookup
+     * and enqueue are fully isolated so a failure can never reverse the
+     * committed booking operation or suppress the in-app notification.
+     *
+     * Privacy: the recipient is always the account user id and the destination
+     * is User.email — never a profile id or googleEmail. Only safe identifiers
+     * and error.message are logged; never the email, payload, or HTML.
+     *
+     * @param {string|object} recipientUserId - the recipient's User id
+     * @param {string|object} bookingId - the booking id (dedupe subject)
+     * @param {string} templateId - EMAIL_TEMPLATE_ID value
+     * @param {string} eventLabel - stable log label (e.g. "booking_cancelled")
+     * @private
+     */
+    async _enqueueBookingOutcomeEmail(recipientUserId, bookingId, templateId, eventLabel) {
+        try {
+            const user = await User.findById(recipientUserId);
+
+            // Skip silently when the account user or email is unavailable.
+            if (!user || !user.email) {
+                return;
+            }
+
+            await emailOutboxService.enqueue({
+                recipientId: recipientUserId,
+                to: user.email,
+                category: NOTIFICATION_CATEGORY.BOOKING,
+                templateId,
+                templateData: { firstName: user.firstName },
+                dedupeKey: emailOutboxService.buildDedupeKey(
+                    templateId,
+                    recipientUserId.toString(),
+                    bookingId.toString()
+                ),
+            });
+        } catch (error) {
+            paymentLogger.error(`${eventLabel}_email_enqueue_failed`, {
+                event: `${eventLabel}_email_enqueue_failed`,
+                bookingId: bookingId.toString(),
+                error: error?.message || error,
+            });
+        }
+    }
 
     async create(clientId, data) {
         const {
@@ -247,7 +295,7 @@ class BookingService {
         // Notify both participants. Emitted only after the booking exists, so a
         // failed create never notifies. Failure-isolated: a notification
         // failure cannot affect the booking response.
-        if (false) await domainNotificationEmitter.emitToRecipients({
+        await domainNotificationEmitter.emitToRecipients({
             category: NOTIFICATION_CATEGORY.BOOKING,
             type: "booking.created",
             subjectId: booking._id.toString(),
@@ -494,7 +542,7 @@ class BookingService {
         // Notify both participants after the state is persisted. The dedupe key
         // is tied to the booking, so a repeated confirmation attempt cannot
         // create a second notification.
-        if (false) await domainNotificationEmitter.emitToRecipients({
+        await domainNotificationEmitter.emitToRecipients({
             category: NOTIFICATION_CATEGORY.BOOKING,
             type: "booking.confirmed",
             subjectId: booking._id.toString(),
@@ -637,7 +685,7 @@ class BookingService {
             ? { recipientId: booking.consultantId, deepLinkPath: "/dashboard/consultant/bookings" }
             : { recipientId: booking.clientId, deepLinkPath: "/dashboard/client/bookings" };
 
-        if (false) await domainNotificationEmitter.emitToRecipients({
+        await domainNotificationEmitter.emitToRecipients({
             category: NOTIFICATION_CATEGORY.BOOKING,
             type: "booking.cancelled",
             subjectId: booking._id.toString(),
@@ -653,6 +701,16 @@ class BookingService {
                 },
             ],
         });
+
+        // Post-commit, post-in-app side effect: email the other party. Fully
+        // isolated; cannot reverse the committed cancellation or suppress the
+        // in-app notification above.
+        await this._enqueueBookingOutcomeEmail(
+            otherParty.recipientId,
+            booking._id,
+            EMAIL_TEMPLATE_ID.BOOKING_CANCELLED,
+            "booking_cancelled"
+        );
 
         // Release slot locks for this booking so the time slot can be re-booked.
         // This is non-critical; failure here doesn't affect the cancellation.
@@ -1152,7 +1210,7 @@ class BookingService {
 
         // Notify the client only. Emitted after the atomic transition returned
         // a document, so a lost race (null result) never notifies.
-        if (false) await domainNotificationEmitter.emitToRecipients({
+        await domainNotificationEmitter.emitToRecipients({
             category: NOTIFICATION_CATEGORY.BOOKING,
             type: "booking.declined",
             subjectId: booking._id.toString(),
@@ -1168,6 +1226,16 @@ class BookingService {
                 },
             ],
         });
+
+        // Post-commit, post-in-app side effect: email the client. Fully
+        // isolated; cannot reverse the committed decline or suppress the
+        // in-app notification above.
+        await this._enqueueBookingOutcomeEmail(
+            booking.clientId,
+            booking._id,
+            EMAIL_TEMPLATE_ID.BOOKING_DECLINED,
+            "booking_declined"
+        );
 
         return booking;
     }

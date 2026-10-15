@@ -86,6 +86,47 @@ const env = {
     },
 
     // ---------------------------------------------------------------------------
+    // Booking Reminders
+    // ---------------------------------------------------------------------------
+
+    bookingReminder: {
+
+        intervalMs: parseInt(process.env.BOOKING_REMINDER_INTERVAL_MS || "300000", 10),
+
+        batchSize: parseInt(process.env.BOOKING_REMINDER_BATCH_SIZE || "50", 10),
+
+        // Lead durations (milliseconds) before ConsultationSession.scheduledStart.
+        lead24hMs: parseInt(process.env.BOOKING_REMINDER_24H_LEAD_MS || String(24 * 60 * 60 * 1000), 10),
+
+        lead1hMs: parseInt(process.env.BOOKING_REMINDER_1H_LEAD_MS || String(60 * 60 * 1000), 10),
+
+    },
+
+    // ---------------------------------------------------------------------------
+    // Review Requests
+    // ---------------------------------------------------------------------------
+
+    // Asks the client to review a consultation one hour after the session is
+    // finalized as COMPLETED. The delay is anchored on the server-derived
+    // ConsultationSession.outcomeFinalizedAt, never on a client-controlled
+    // timestamp. Values are bounded so a malformed variable cannot produce a
+    // zero/negative interval, an unbounded batch, or a negative delay.
+    reviewRequest: {
+
+        intervalMs: boundedInt(process.env.REVIEW_REQUEST_INTERVAL_MS, 300000, 1000, 3600000),
+
+        batchSize: boundedInt(process.env.REVIEW_REQUEST_BATCH_SIZE, 50, 1, 100),
+
+        delayMs: boundedInt(
+            process.env.REVIEW_REQUEST_DELAY_MS,
+            60 * 60 * 1000,
+            0,
+            7 * 24 * 60 * 60 * 1000
+        ),
+
+    },
+
+    // ---------------------------------------------------------------------------
     // Payment Reconciliation
     // ---------------------------------------------------------------------------
 

@@ -6,6 +6,10 @@ import Booking from "../models/Booking.js";
 import Payment from "../models/Payment.js";
 import Category from "../models/Category.js";
 import { koboToNaira } from "../utils/currency.js";
+import paymentLogger from "../utils/logger.js";
+import domainNotificationEmitter from "./domain-notification.emitter.js";
+import emailOutboxService from "./email-outbox.service.js";
+import { NOTIFICATION_CATEGORY, EMAIL_TEMPLATE_ID } from "../utils/constants.js";
 
 class AdminService {
 
@@ -733,6 +737,52 @@ class AdminService {
 
     }
 
+    /**
+     * Enqueue a consultant decision email (approval/rejection) via the durable
+     * email outbox. Non-critical post-commit side effect: the account lookup
+     * and enqueue are fully isolated so a failure can never reverse the
+     * committed admin decision or suppress the in-app notification.
+     *
+     * Privacy: the recipient is always the account user (profile.userId) and
+     * the destination is User.email — never the profile id or googleEmail.
+     * Only safe identifiers and error.message are logged; never the email,
+     * payload, or any rejection reason.
+     *
+     * @param {object} updatedProfile - the persisted ConsultantProfile
+     * @param {string} templateId - EMAIL_TEMPLATE_ID value
+     * @param {string} eventLabel - stable log label (e.g. "consultant_approved")
+     * @private
+     */
+    async _enqueueConsultantDecisionEmail(updatedProfile, templateId, eventLabel) {
+        try {
+            const user = await User.findById(updatedProfile.userId);
+
+            // Skip silently when the account user or email is unavailable.
+            if (!user || !user.email) {
+                return;
+            }
+
+            await emailOutboxService.enqueue({
+                recipientId: updatedProfile.userId,
+                to: user.email,
+                category: NOTIFICATION_CATEGORY.ACCOUNT,
+                templateId,
+                templateData: { firstName: user.firstName },
+                dedupeKey: emailOutboxService.buildDedupeKey(
+                    templateId,
+                    updatedProfile.userId.toString(),
+                    updatedProfile._id.toString()
+                ),
+            });
+        } catch (error) {
+            paymentLogger.error(`${eventLabel}_email_enqueue_failed`, {
+                event: `${eventLabel}_email_enqueue_failed`,
+                profileId: updatedProfile._id.toString(),
+                error: error?.message || error,
+            });
+        }
+    }
+
     async approveConsultant(profileId) {
 
         const profile = await ConsultantProfile.findById(profileId);
@@ -755,11 +805,43 @@ class AdminService {
 
         }
 
-        return await ConsultantProfile.findByIdAndUpdate(
+        const updatedProfile = await ConsultantProfile.findByIdAndUpdate(
             profileId,
             { approvalStatus: "approved", isActive: true },
             { new: true, runValidators: true }
         );
+
+        // Notify the consultant (in-app only) after the approval is persisted.
+        // Failure-isolated by the emitter, so a notification error cannot undo
+        // the committed admin decision. The recipient is the consultant's User
+        // id (profile.userId), never the profile id; the profile id is only the
+        // dedupe subject. Dedupe key: consultant.approved:${userId}:${profileId}.
+        await domainNotificationEmitter.emitToRecipients({
+            category: NOTIFICATION_CATEGORY.ACCOUNT,
+            type: "consultant.approved",
+            subjectId: updatedProfile._id.toString(),
+            recipients: [
+                {
+                    recipientId: updatedProfile.userId,
+                    title: "Consultant account approved",
+                    body: "Your consultant account has been approved. You can now receive bookings.",
+                    data: {
+                        deepLinkPath: "/dashboard/consultant",
+                    },
+                },
+            ],
+        });
+
+        // Post-commit, post-in-app side effect: enqueue the approval email.
+        // Fully isolated; cannot reverse the decision or suppress the in-app
+        // notification above.
+        await this._enqueueConsultantDecisionEmail(
+            updatedProfile,
+            EMAIL_TEMPLATE_ID.CONSULTANT_APPROVAL,
+            "consultant_approved"
+        );
+
+        return updatedProfile;
 
     }
 
@@ -785,11 +867,42 @@ class AdminService {
 
         }
 
-        return await ConsultantProfile.findByIdAndUpdate(
+        const updatedProfile = await ConsultantProfile.findByIdAndUpdate(
             profileId,
             { approvalStatus: "rejected", isActive: false },
             { new: true, runValidators: true }
         );
+
+        // Notify the consultant (in-app only) after the rejection is persisted.
+        // Failure-isolated by the emitter. The body deliberately omits any
+        // rejection reason (none is captured). Recipient is profile.userId;
+        // the profile id is only the dedupe subject.
+        // Dedupe key: consultant.rejected:${userId}:${profileId}.
+        await domainNotificationEmitter.emitToRecipients({
+            category: NOTIFICATION_CATEGORY.ACCOUNT,
+            type: "consultant.rejected",
+            subjectId: updatedProfile._id.toString(),
+            recipients: [
+                {
+                    recipientId: updatedProfile.userId,
+                    title: "Consultant application update",
+                    body: "Your consultant application was not approved at this time.",
+                    data: {
+                        deepLinkPath: "/dashboard/consultant",
+                    },
+                },
+            ],
+        });
+
+        // Post-commit, post-in-app side effect: enqueue the rejection email.
+        // Fully isolated; the body carries no rejection reason.
+        await this._enqueueConsultantDecisionEmail(
+            updatedProfile,
+            EMAIL_TEMPLATE_ID.CONSULTANT_REJECTION,
+            "consultant_rejected"
+        );
+
+        return updatedProfile;
 
     }
 

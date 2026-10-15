@@ -45,35 +45,44 @@ router.use(authenticate());
 |--------------------------------------------------------------------------
 | Client Routes
 |--------------------------------------------------------------------------
+|
+| Registered directly on the booking router instead of inside a sub-router
+| mounted at "/". A sub-router mounted at "/" is a catch-all: its pathless
+| `authorize("BUSINESS_OWNER")` runs for EVERY booking path — including
+| /consultant/* and /admin/* — so consultant and admin requests were rejected
+| before their own routers were ever reached. Applying the role check per
+| route preserves client-only authorization without shadowing the others.
+|
+| The top-level `authenticate()` above already covers these routes, so no
+| per-route authentication middleware is required.
 */
 
-const clientRouter = Router();
-
-clientRouter.use(authenticate());
-clientRouter.use(authorize("BUSINESS_OWNER"));
-
-clientRouter.post(
+router.post(
     "/",
+    authorize("BUSINESS_OWNER"),
     createBookingValidator,
     validate,
     createBooking
 );
 
-clientRouter.get(
+router.get(
     "/",
+    authorize("BUSINESS_OWNER"),
     bookingStatusQueryValidator,
     paginationQueryValidator,
     validate,
     getMyBookings
 );
 
-clientRouter.get(
+router.get(
     "/upcoming",
+    authorize("BUSINESS_OWNER"),
     getUpcomingBookings
 );
 
-clientRouter.get(
+router.get(
     "/client/stats",
+    authorize("BUSINESS_OWNER"),
     getClientStats
 );
 
@@ -163,7 +172,9 @@ adminRouter.get(
     getAllBookings
 );
 
-router.use("/", clientRouter);
+// Mount the role-specific routers at their explicit prefixes. The client
+// routes above are registered directly on this router, so there is no
+// catch-all mount that could intercept /consultant/* or /admin/*.
 router.use("/consultant", consultantRouter);
 router.use("/admin", adminRouter);
 

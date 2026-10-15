@@ -5,7 +5,11 @@ import Booking from "../models/Booking.js";
 import ConsultationSession from "../models/ConsultationSession.js";
 import Payment from "../models/Payment.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
+import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
+import paymentLogger from "../utils/logger.js";
+import domainNotificationEmitter from "./domain-notification.emitter.js";
+import emailOutboxService from "./email-outbox.service.js";
 import {
     USER_ROLES,
     SESSION_OUTCOME,
@@ -14,6 +18,8 @@ import {
     PLATFORM_COMMISSION_RATE,
     BOOKING_STATUS,
     APP_TIMEZONE,
+    NOTIFICATION_CATEGORY,
+    EMAIL_TEMPLATE_ID,
 } from "../utils/constants.js";
 
 // ---------------------------------------------------------------------------
@@ -303,6 +309,50 @@ class ConsultantEarningService {
      * @returns {Promise<object>} The cancelled earning or null if not found
      * @throws {ApiError} If the earning is in IN_PAYOUT or PAID status
      */
+    /**
+     * Enqueue an earning-cancelled email to the consultant via the durable
+     * email outbox. Non-critical post-commit side effect: the account lookup
+     * and enqueue are fully isolated so a failure can never reverse the
+     * committed cancellation or suppress the in-app notification.
+     *
+     * Privacy: the recipient is the earning's consultant User id and the
+     * destination is User.email — never a profile id or googleEmail. No amount,
+     * payout, recovery, or cancellation reason is included. Only safe
+     * identifiers and error.message are logged.
+     *
+     * @param {string|object} consultantUserId - the consultant's User id
+     * @param {string|object} earningId - the earning id (dedupe subject)
+     * @private
+     */
+    async _enqueueEarningCancelledEmail(consultantUserId, earningId) {
+        try {
+            const user = await User.findById(consultantUserId);
+
+            if (!user || !user.email) {
+                return;
+            }
+
+            await emailOutboxService.enqueue({
+                recipientId: consultantUserId,
+                to: user.email,
+                category: NOTIFICATION_CATEGORY.EARNING,
+                templateId: EMAIL_TEMPLATE_ID.EARNING_CANCELLED,
+                templateData: { firstName: user.firstName },
+                dedupeKey: emailOutboxService.buildDedupeKey(
+                    EMAIL_TEMPLATE_ID.EARNING_CANCELLED,
+                    consultantUserId.toString(),
+                    earningId.toString()
+                ),
+            });
+        } catch (error) {
+            paymentLogger.error("earning_cancelled_email_enqueue_failed", {
+                event: "earning_cancelled_email_enqueue_failed",
+                earningId: earningId.toString(),
+                error: error?.message || error,
+            });
+        }
+    }
+
     async cancelEarningForBooking(bookingId) {
         const earning = await ConsultantEarning.findOne({ bookingId });
 
@@ -326,10 +376,43 @@ class ConsultantEarningService {
             );
         }
 
+        // Capture whether this call is a genuine transition into CANCELLED so
+        // a retried cancellation of an already-cancelled earning does not
+        // re-notify. The per-earning dedupe key is a second safety net.
+        const wasAlreadyCancelled = earning.status === EARNING_STATUS.CANCELLED;
+
         earning.status = EARNING_STATUS.CANCELLED;
         earning.holdReason = null;
 
         await earning.save();
+
+        // Notify the consultant only after the cancellation is persisted and
+        // only on a real transition. Failure-isolated: a notification error
+        // cannot affect the committed cancellation.
+        if (!wasAlreadyCancelled) {
+            await domainNotificationEmitter.emitToRecipients({
+                category: NOTIFICATION_CATEGORY.EARNING,
+                type: "earning.cancelled",
+                subjectId: earning._id.toString(),
+                recipients: [
+                    {
+                        recipientId: earning.consultantId,
+                        title: "Earning cancelled",
+                        body: "An earning for one of your sessions has been cancelled.",
+                        data: {
+                            earningId: earning._id,
+                            bookingId: earning.bookingId,
+                            deepLinkPath: "/dashboard/consultant/earnings",
+                        },
+                    },
+                ],
+            });
+
+            // Post-commit, post-in-app side effect: email the consultant. Fully
+            // isolated; cannot reverse the committed cancellation or suppress the
+            // in-app notification above. No amount or reason is included.
+            await this._enqueueEarningCancelledEmail(earning.consultantId, earning._id);
+        }
 
         return earning;
     }
@@ -703,6 +786,32 @@ class ConsultantEarningService {
                 },
             }
         );
+
+        // Notify each consultant whose earning transitioned PENDING → ELIGIBLE.
+        // `transitionableEarnings` are exactly the PENDING records targeted by
+        // the guarded updateMany (already-eligible and cancelled-booking
+        // earnings were excluded above), so we never notify records that did
+        // not transition. The per-earning dedupe key makes a repeated worker
+        // run (which finds no PENDING earnings) idempotent.
+        for (const earning of transitionableEarnings) {
+            await domainNotificationEmitter.emitToRecipients({
+                category: NOTIFICATION_CATEGORY.EARNING,
+                type: "earning.eligible",
+                subjectId: earning._id.toString(),
+                recipients: [
+                    {
+                        recipientId: earning.consultantId,
+                        title: "Earning is now eligible",
+                        body: "One of your session earnings is now eligible for payout.",
+                        data: {
+                            earningId: earning._id,
+                            bookingId: earning.bookingId,
+                            deepLinkPath: "/dashboard/consultant/earnings",
+                        },
+                    },
+                ],
+            });
+        }
 
         return result.modifiedCount;
     }

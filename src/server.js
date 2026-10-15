@@ -11,6 +11,9 @@ import payoutProcessingService from "./services/payout-processing.service.js";
 import payoutReconciliationService from "./services/payout-reconciliation.service.js";
 import googleMeetAttendanceWorker from "./services/google-meet-attendance.worker.js";
 import emailOutboxWorker from "./services/email-outbox.worker.js";
+import bookingReminderService from "./services/booking-reminder.service.js";
+import reviewRequestService from "./services/review-request.service.js";
+import notificationRealtime from "./realtime/notification.socket.js";
 
 import env from "./config/env.js";
 import paymentLogger from "./utils/logger.js";
@@ -84,6 +87,12 @@ function startWorkers() {
     // Email outbox worker: durable, retryable email delivery
     emailOutboxWorker.start();
 
+    // Booking reminder worker: 24h/1h reminders for confirmed sessions
+    bookingReminderService.start();
+
+    // Review request worker: asks the client to review 1h after COMPLETED
+    reviewRequestService.start();
+
     paymentLogger.info("workers_started", {
 
         event: "workers_started",
@@ -106,6 +115,10 @@ async function gracefulShutdown(signal) {
 
     });
 
+    // Close real-time connections first so open sockets are drained before
+    // the HTTP server and the database go away.
+    await notificationRealtime.close();
+
     // Stop workers first
     consultationSessionOutcomeService.stop();
     consultationSessionFinancialWorker.stop();
@@ -116,6 +129,8 @@ async function gracefulShutdown(signal) {
     payoutReconciliationService.stop();
     googleMeetAttendanceWorker.stop();
     emailOutboxWorker.stop();
+    bookingReminderService.stop();
+    reviewRequestService.stop();
 
     // Close HTTP server
     if (server) {
@@ -168,6 +183,14 @@ async function bootstrap() {
         });
 
     });
+
+    // Attach Socket.IO to the SAME HTTP server. No new listener or port.
+    notificationRealtime.attach(server, [
+        env.appUrl,
+        process.env.FRONTEND_URL,
+        "http://localhost:5000",
+        "http://localhost:5173",
+    ].filter(Boolean));
 
     startWorkers();
 

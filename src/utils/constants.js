@@ -185,6 +185,20 @@ export const EMAIL_TEMPLATE_ID = Object.freeze({
     PAYMENT_FAILURE: "payment-failure",
     PAYMENT_SUCCESS_CONSULTANT: "payment-success-consultant",
     PAYMENT_FAILURE_CONSULTANT: "payment-failure-consultant",
+    CONSULTANT_APPROVAL: "consultant-approval",
+    CONSULTANT_REJECTION: "consultant-rejection",
+    BOOKING_CANCELLED: "booking-cancelled",
+    BOOKING_DECLINED: "booking-declined",
+    REFUND_COMPLETED: "refund-completed",
+    REFUND_FAILED: "refund-failed",
+    PAYOUT_COMPLETED: "payout-completed",
+    PAYOUT_FAILED: "payout-failed",
+    SESSION_COMPLETED: "session-completed",
+    REVIEW_RECEIVED: "review-received",
+    EARNING_CANCELLED: "earning-cancelled",
+    BOOKING_REMINDER_24H: "booking-reminder-24h",
+    BOOKING_REMINDER_1H: "booking-reminder-1h",
+    REVIEW_REQUEST: "review-request",
 });
 
 export const MINIMUM_PAYOUT_KOBO = 1000000; // ₦10,000 in kobo
