@@ -612,6 +612,38 @@ class BookingService {
         booking.status = BOOKING_STATUS.COMPLETED;
         await booking.save();
 
+        // Notify both participants that the booking was marked as completed.
+        // This only records the booking status transition; it does not claim
+        // the consultation itself was successful (that is determined by the
+        // session outcome worker, which emits session.outcome_finalized
+        // separately). Failure-isolated: a notification failure cannot
+        // reverse the completed booking.
+        await domainNotificationEmitter.emitToRecipients({
+            category: NOTIFICATION_CATEGORY.BOOKING,
+            type: "booking.completed",
+            subjectId: booking._id.toString(),
+            recipients: [
+                {
+                    recipientId: booking.clientId,
+                    title: "Booking completed",
+                    body: "Your consultation session has been marked as completed.",
+                    data: {
+                        bookingId: booking._id,
+                        deepLinkPath: "/dashboard/client/bookings",
+                    },
+                },
+                {
+                    recipientId: booking.consultantId,
+                    title: "Booking completed",
+                    body: "Your consultation session has been marked as completed.",
+                    data: {
+                        bookingId: booking._id,
+                        deepLinkPath: "/dashboard/consultant/bookings",
+                    },
+                },
+            ],
+        });
+
         return booking;
     }
 
@@ -1140,6 +1172,25 @@ class BookingService {
             } catch (calendarError) {
                 console.error("[GoogleCalendar] Failed to create event for accepted booking:", calendarError.message);
             }
+
+            // Notify the client that their booking was accepted. Failure-isolated:
+            // a notification failure cannot reverse the accepted booking.
+            await domainNotificationEmitter.emitToRecipients({
+                category: NOTIFICATION_CATEGORY.BOOKING,
+                type: "booking.accepted",
+                subjectId: booking._id.toString(),
+                recipients: [
+                    {
+                        recipientId: booking.clientId,
+                        title: "Booking accepted",
+                        body: "The consultant has accepted your booking request.",
+                        data: {
+                            bookingId: booking._id,
+                            deepLinkPath: "/dashboard/client/bookings",
+                        },
+                    },
+                ],
+            });
 
             return booking;
         }

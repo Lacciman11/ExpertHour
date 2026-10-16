@@ -241,8 +241,15 @@ class NotificationRealtime {
     }
 
     /**
-     * Close every open connection and release the Socket.IO server.
-     * Safe to call when never attached.
+     * Disconnect every open Socket.IO client and release the Socket.IO engine.
+     *
+     * Deliberately does NOT call `io.close()`: Socket.IO's `close()` also calls
+     * `this.httpServer.close()` and awaits it, which would shut down the shared
+     * Express HTTP server that `server.js` owns. Closing the engine directly
+     * disconnects clients and releases the transports while leaving the HTTP
+     * server listening, so the caller can close it exactly once.
+     *
+     * Safe to call when never attached, and safe to call repeatedly.
      *
      * @returns {Promise<void>}
      */
@@ -252,9 +259,15 @@ class NotificationRealtime {
             return;
         }
 
+        const io = this.io;
+
+        // Clear the reference first so a repeated call is a no-op even if the
+        // teardown below throws.
+        this.io = null;
+
         try {
 
-            await this.io.close();
+            io.engine.close();
 
         } catch (error) {
 
@@ -262,10 +275,6 @@ class NotificationRealtime {
                 event: "realtime_close_failed",
                 error: error?.message || error,
             });
-
-        } finally {
-
-            this.io = null;
 
         }
 
