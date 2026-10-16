@@ -1175,13 +1175,28 @@ class BookingService {
 
             // Notify the client that their booking was accepted. Failure-isolated:
             // a notification failure cannot reverse the accepted booking.
-            await domainNotificationEmitter.emitToRecipients({
+            const recipientId = booking.clientId;
+            const recipientIsValidObjectId =
+                !!recipientId && mongoose.Types.ObjectId.isValid(recipientId);
+
+            // Diagnostic only: safe identifiers (booking id, status, recipient
+            // validity). Never logs email, tokens, credentials, or personal data.
+            paymentLogger.info("booking_accepted_notification_emit", {
+                event: "booking_accepted_notification_emit",
+                bookingId: booking._id.toString(),
+                notificationType: "booking.accepted",
+                hasClientId: !!recipientId,
+                recipientIsValidObjectId,
+                bookingStatus: booking.status,
+            });
+
+            const emitOutcome = await domainNotificationEmitter.emitToRecipients({
                 category: NOTIFICATION_CATEGORY.BOOKING,
                 type: "booking.accepted",
                 subjectId: booking._id.toString(),
                 recipients: [
                     {
-                        recipientId: booking.clientId,
+                        recipientId,
                         title: "Booking accepted",
                         body: "The consultant has accepted your booking request.",
                         data: {
@@ -1190,6 +1205,18 @@ class BookingService {
                         },
                     },
                 ],
+            });
+
+            // Log the emitter's existing safe outcome contract
+            // ({ attempted, succeeded, created }) so a silent skip is
+            // observable in logs without changing the contract.
+            paymentLogger.info("booking_accepted_notification_emit_outcome", {
+                event: "booking_accepted_notification_emit_outcome",
+                bookingId: booking._id.toString(),
+                notificationType: "booking.accepted",
+                attempted: emitOutcome?.attempted,
+                succeeded: emitOutcome?.succeeded,
+                created: emitOutcome?.created,
             });
 
             return booking;

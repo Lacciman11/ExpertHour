@@ -122,6 +122,16 @@ async function emitToRecipients({ category, type, subjectId, recipients }) {
 
     for (const recipient of recipients) {
         if (!recipient || !recipient.recipientId) {
+            // A recipient with no usable id is silently skipped above. Log it
+            // so a missing notification is observable without changing the
+            // skip behaviour. Safe identifiers only: type and subject id.
+            paymentLogger.warn("domain_notification_recipient_skipped", {
+                event: "domain_notification_recipient_skipped",
+                notificationType: type,
+                subjectId,
+                reason: "missing_recipient_id",
+            });
+
             continue;
         }
 
