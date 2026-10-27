@@ -6,6 +6,7 @@ import {
     exportMyEarnings,
     getAllEarnings,
     getEarningById,
+    verifyEarningConsistency,
 } from "../controllers/consultant-earning.controller.js";
 
 import authenticate from "../middlewares/auth.middleware.js";
@@ -58,6 +59,16 @@ adminRouter.use(authorize("ADMIN"));
 adminRouter.get(
     "/admin/all",
     getAllEarnings
+);
+
+adminRouter.get(
+    "/admin/consistency",
+    verifyEarningConsistency
+);
+
+adminRouter.get(
+    "/admin/consistency/:id",
+    verifyEarningConsistency
 );
 
 adminRouter.get(

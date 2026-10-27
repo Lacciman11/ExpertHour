@@ -3,6 +3,7 @@ import { Router } from "express";
 import {
     getDashboardStats,
     getPaymentStats,
+    getPaymentRecoveryReport,
     getAllPayments,
     getAllUsers,
     getAllConsultants,
@@ -17,6 +18,7 @@ import {
     suspendConsultant,
     activateConsultant,
     changeUserRole,
+    manualReconcilePayment,
 } from "../controllers/admin.controller.js";
 
 import {
@@ -60,6 +62,10 @@ router.get("/stats", getDashboardStats);
 router.get("/payments/stats", getPaymentStats);
 
 router.get("/payments", getAllPayments);
+
+router.get("/payments/recovery-report", getPaymentRecoveryReport);
+
+router.post("/payments/:reference/reconcile", manualReconcilePayment);
 
 /*
 |--------------------------------------------------------------------------

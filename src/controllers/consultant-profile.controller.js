@@ -382,9 +382,11 @@ export const getAvailableSlotsForDate = asyncHandler(async (req, res) => {
 
     }
 
-    const [year, month, day] = date.split("-").map(Number);
-    const targetDate = new Date(Date.UTC(year, month - 1, day));
-    const dayOfWeek = targetDate.getUTCDay();
+    // Use Africa/Lagos calendar day for consistency with booking validation
+    const lagosDate = new Date(`${date}T00:00:00+01:00`);
+    const weekday = new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Lagos', weekday: 'short' }).format(lagosDate);
+    const dayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    const dayOfWeek = dayMap[weekday] !== undefined ? dayMap[weekday] : lagosDate.getDay();
 
     // Get slots for the requested day
     const slots = profile.availabilitySlots.filter(

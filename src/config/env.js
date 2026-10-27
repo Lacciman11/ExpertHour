@@ -156,6 +156,12 @@ const env = {
 
         batchSize: parseInt(process.env.REFUND_RECONCILIATION_BATCH_SIZE || "10", 10),
 
+        maxAttempts: boundedInt(process.env.REFUND_RECONCILIATION_MAX_ATTEMPTS, 5, 1, 100),
+
+        initialRetryDelayMs: boundedInt(process.env.REFUND_RECONCILIATION_INITIAL_RETRY_DELAY_MS, 60000, 0, 86400000),
+
+        maxRetryDelayMs: boundedInt(process.env.REFUND_RECONCILIATION_MAX_RETRY_DELAY_MS, 3600000, 0, 86400000),
+
     },
 
     // ---------------------------------------------------------------------------
@@ -188,6 +194,18 @@ const env = {
 
         batchSize: parseInt(process.env.PAYOUT_RECONCILIATION_BATCH_SIZE || "20", 10),
 
+    },
+
+    // ---------------------------------------------------------------------------
+    // Dispute Financial Processing
+    // ---------------------------------------------------------------------------
+    disputeFinancial: {
+        intervalMs: parseInt(process.env.DISPUTE_FINANCIAL_INTERVAL_MS || "60000", 10),
+        batchSize: parseInt(process.env.DISPUTE_FINANCIAL_BATCH_SIZE || "10", 10),
+        leaseMs: parseInt(process.env.DISPUTE_FINANCIAL_LEASE_MS || "300000", 10),
+        maxAttempts: boundedInt(process.env.DISPUTE_FINANCIAL_MAX_ATTEMPTS, 5, 1, 100),
+        initialRetryDelayMs: boundedInt(process.env.DISPUTE_FINANCIAL_INITIAL_RETRY_DELAY_MS, 60000, 0, 86400000),
+        maxRetryDelayMs: boundedInt(process.env.DISPUTE_FINANCIAL_MAX_RETRY_DELAY_MS, 3600000, 0, 86400000),
     },
 
     // ---------------------------------------------------------------------------

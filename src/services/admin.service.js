@@ -952,6 +952,48 @@ class AdminService {
 
     }
 
+    async getPaymentRecoveryReport({ page = 1, limit = 20 } = {}) {
+        const env = (await import("../config/env.js")).default;
+        const { delayMs, processingTimeoutMs, maxAttempts } = env.paymentReconciliation;
+        const now = new Date();
+        const pendingCutoff = new Date(now.getTime() - delayMs);
+        const processingCutoff = new Date(now.getTime() - processingTimeoutMs);
+
+        const query = {
+            $or: [
+                { status: "pending", reconciliationAttempts: { $gte: maxAttempts } },
+                { status: "processing", processingStartedAt: { $lt: processingCutoff }, reconciliationAttempts: { $gte: maxAttempts } },
+                { status: "pending", createdAt: { $lt: pendingCutoff }, reconciliationAttempts: { $lt: maxAttempts } },
+                { status: "processing", processingStartedAt: { $lt: processingCutoff }, reconciliationAttempts: { $lt: maxAttempts } },
+            ],
+        };
+
+        const skip = (page - 1) * limit;
+        const [items, total] = await Promise.all([
+            Payment.find(query)
+                .select("reference status reconciliationAttempts createdAt lastReconciliationAttemptAt processingStartedAt")
+                .sort({ createdAt: 1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Payment.countDocuments(query),
+        ]);
+
+        return {
+            items: items.map((p) => ({
+                id: p._id,
+                reference: p.reference,
+                status: p.status,
+                reconciliationAttempts: p.reconciliationAttempts,
+                maxAttempts,
+                createdAt: p.createdAt,
+                lastReconciliationAttemptAt: p.lastReconciliationAttemptAt,
+                processingStartedAt: p.processingStartedAt,
+            })),
+            pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+        };
+    }
+
 }
 
 export default new AdminService();

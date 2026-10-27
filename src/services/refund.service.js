@@ -793,6 +793,21 @@ class RefundService {
             }
         }
 
+        // Safety: if a pending refund with same reference exists on payment
+        // (e.g. Paystack succeeded but local tx failed previously), do not
+        // initiate another provider refund.
+        if (payment.refundReference === refundReference && payment.refundStatus === "pending") {
+            return {
+                success: true,
+                idempotent: true,
+                pending: true,
+                reason: "Pending refund with same reference exists",
+                earning,
+                payment,
+                booking,
+            };
+        }
+
         // 8. For non-PAID earnings, validate refund against remaining refundable amount.
         //    (Recovery amounts are capped by consultantEntitlement instead.)
         if (!refundCheck.recovery) {

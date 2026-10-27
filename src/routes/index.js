@@ -13,6 +13,7 @@ import consultantEarningRoutes from "./consultant-earning.routes.js";
 import payoutRoutes from "./payout.routes.js";
 import applicationRoutes from "./application.routes.js";
 import notificationRoutes from "./notification.routes.js";
+import disputeRoutes from "./dispute.routes.js";
 
 const routes = [
     { path: "/api/v1/auth", router: authRoutes },
@@ -29,6 +30,7 @@ const routes = [
     { path: "/api/v1/payouts", router: payoutRoutes },
     { path: "/api/v1/applications", router: applicationRoutes },
     { path: "/api/v1/notifications", router: notificationRoutes },
+    { path: "/api/v1/disputes", router: disputeRoutes },
     { path: "/auth", router: authPageRoutes },
 ];
 

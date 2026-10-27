@@ -145,24 +145,70 @@ class PaymentReconciliationService {
         });
 
         try {
-
+ 
             const candidates = await this._findCandidates();
-
+ 
             paymentLogger.info("reconciliation_candidates_found", {
-
+ 
                 event: "reconciliation_candidates_found",
-
+ 
                 count: candidates.length,
-
+ 
             });
-
+ 
+            // Count exhausted payments (pending or stale processing with attempts >= maxAttempts).
+            // This is a read-only count query; it does not mutate any records.
+            let maxReached = 0;
+            try {
+                const now = new Date();
+                const processingCutoff = new Date(now.getTime() - processingTimeoutMs);
+ 
+                const exhaustedPending = await Payment.find({
+                    status: "pending",
+                    reconciliationAttempts: { $gte: maxAttempts },
+                })
+                    .select("reference")
+                    .lean();
+ 
+                const exhaustedProcessing = await Payment.find({
+                    status: "processing",
+                    processingStartedAt: { $lt: processingCutoff },
+                    reconciliationAttempts: { $gte: maxAttempts },
+                })
+                    .select("reference")
+                    .lean();
+ 
+                const seen = new Set();
+                for (const p of [...exhaustedPending, ...exhaustedProcessing]) {
+                    if (seen.has(p.reference)) continue;
+                    seen.add(p.reference);
+                    maxReached++;
+                }
+            } catch (countError) {
+                paymentLogger.error("reconciliation_max_reached_count_failed", {
+                    event: "reconciliation_max_reached_count_failed",
+                    error: countError.message,
+                });
+                // Re-throw to be caught by the outer catch, which logs cycle failure.
+                throw countError;
+            }
+ 
             let processed = 0;
 
             let succeeded = 0;
-
+            let reconciled = 0;
+            let alreadyVerified = 0;
+            let skippedProcessing = 0;
+            let deferred = 0;
+            let terminalFailures = 0;
+            let transientErrors = 0;
+            let unexpectedErrors = 0;
             let failed = 0;
-
-            let maxReached = 0;
+            // `failed` is intentionally NOT a catch-all. It counts only
+            // terminal failures (Paystack-confirmed failed status). Skipped
+            // (still processing) and deferred (non-terminal Paystack status,
+            // reverted to pending) are NOT failures — they are recoverable
+            // outcomes that will be retried in a future cycle.
 
             for (const payment of candidates) {
 
@@ -185,75 +231,84 @@ class PaymentReconciliationService {
                     const result = await paymentService.reconcilePayment(payment.reference);
 
                     if (result.success) {
-
+                        if (result.alreadyVerified) {
+                            alreadyVerified++;
+                        } else {
+                            reconciled++;
+                        }
                         succeeded++;
 
                         paymentLogger.info("reconciliation_payment_recovered", {
-
                             event: "reconciliation_payment_recovered",
-
                             reference: payment.reference,
-
                             status: "success",
-
+                            alreadyVerified: !!result.alreadyVerified,
                         });
 
                     } else if (result.status === "processing") {
+                        skippedProcessing++;
 
                         paymentLogger.info("reconciliation_payment_skipped_processing", {
-
                             event: "reconciliation_payment_skipped_processing",
-
                             reference: payment.reference,
+                        });
 
+                    } else if (result.status === "pending") {
+                        deferred++;
+
+                        paymentLogger.info("reconciliation_payment_deferred", {
+                            event: "reconciliation_payment_deferred",
+                            reference: payment.reference,
+                            reason: result.reason,
                         });
 
                     } else {
-
+                        terminalFailures++;
                         failed++;
 
-                        paymentLogger.info("reconciliation_payment_not_successful", {
-
-                            event: "reconciliation_payment_not_successful",
-
+                        paymentLogger.info("reconciliation_payment_terminal_failure", {
+                            event: "reconciliation_payment_terminal_failure",
                             reference: payment.reference,
-
                             reason: result.reason,
-
                         });
 
                     }
 
                 } catch (error) {
-
-                    failed++;
+                    // ReconcilePayment throws on transient Paystack/network errors
+                    // and on integrity violations. Both revert the payment to
+                    // pending, so they are recoverable and must NOT be counted
+                    // as failures. Only the "maximum retry" branch is terminal
+                    // (the payment is exhausted and will not be retried this
+                    // cycle); it is counted under both maxReached and
+                    // terminalFailures.
 
                     if (error instanceof Error && error.message.includes("maximum retry")) {
-
                         maxReached++;
+                        terminalFailures++;
+                        failed++;
 
                         paymentLogger.error("reconciliation_max_retries_reached", {
-
                             event: "reconciliation_max_retries_reached",
-
                             reference: payment.reference,
-
                             error: error.message,
-
                         });
+                    } else if (error && error.type === "transient") {
+                        transientErrors++;
 
+                        paymentLogger.error("reconciliation_payment_transient_error", {
+                            event: "reconciliation_payment_transient_error",
+                            reference: payment.reference,
+                            error: error.message,
+                        });
                     } else {
+                        unexpectedErrors++;
 
                         paymentLogger.error("reconciliation_payment_error", {
-
                             event: "reconciliation_payment_error",
-
                             reference: payment.reference,
-
                             error: error.message,
-
                         });
-
                     }
 
                 }
@@ -263,19 +318,19 @@ class PaymentReconciliationService {
             const cycleDuration = Date.now() - cycleStart;
 
             paymentLogger.info("reconciliation_cycle_completed", {
-
                 event: "reconciliation_cycle_completed",
-
                 cycleDurationMs: cycleDuration,
-
                 processed,
-
                 succeeded,
-
                 failed,
-
+                reconciled,
+                alreadyVerified,
+                skippedProcessing,
+                deferred,
+                terminalFailures,
+                transientErrors,
+                unexpectedErrors,
                 maxReached,
-
             });
 
         } catch (error) {

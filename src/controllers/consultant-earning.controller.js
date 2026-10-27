@@ -253,3 +253,16 @@ export const getEarningById = asyncHandler(async (req, res) => {
     );
 
 });
+
+export const verifyEarningConsistency = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const page = parseInt(req.query.page || "1", 10);
+    let limit = parseInt(req.query.limit || "50", 10);
+    if (isNaN(limit) || limit < 1) limit = 50;
+    if (limit > 100) limit = 100;
+    if (id) {
+        validateObjectId(id);
+    }
+    const result = await consultantEarningService.verifyEarningConsistency(id || null, page, limit);
+    return res.status(200).json(new ApiResponse(200, result, "Earning consistency check completed"));
+});

@@ -204,11 +204,23 @@ class RefundReconciliationService {
 
                 processed++;
 
+                // Persist attempt count and timestamp atomically before processing.
+                await Payment.updateOne(
+                    { _id: payment._id },
+                    { $inc: { reconciliationAttempts: 1 }, $set: { lastReconciliationAttemptAt: new Date() } }
+                );
+
                 try {
 
                     const result = await refundService.reconcileRefundWithPaystack(payment._id);
 
                     if (result.reconciled) {
+                        try {
+                            const disputeService = (await import("./dispute.service.js")).default;
+                            await disputeService.finalizeDisputeFromReconciliation(payment.refundReference);
+                        } catch (err) {
+                            // ignore
+                        }
 
                         reconciled++;
 
@@ -305,17 +317,30 @@ class RefundReconciliationService {
      * successfully but the local MongoDB transaction failed.
      */
     async _findCandidates() {
+        const { maxAttempts, initialRetryDelayMs, maxRetryDelayMs } = env.refundReconciliation;
+        const now = Date.now();
 
         const payments = await Payment.find({
             refundStatus: "pending",
             refundReference: { $ne: "", $exists: true },
         })
             .sort({ updatedAt: 1 })
-            .limit(batchSize)
+            .limit(batchSize * 4)
             .lean();
 
-        return payments;
-
+        const eligible = [];
+        for (const p of payments) {
+            const attempts = p.reconciliationAttempts || 0;
+            if (attempts >= maxAttempts) continue;
+            const last = p.lastReconciliationAttemptAt ? new Date(p.lastReconciliationAttemptAt).getTime() : null;
+            if (last !== null) {
+                const delay = Math.min(maxRetryDelayMs, initialRetryDelayMs * Math.pow(2, attempts));
+                if (now - last < delay) continue;
+            }
+            eligible.push(p);
+            if (eligible.length >= batchSize) break;
+        }
+        return eligible;
     }
 
 }

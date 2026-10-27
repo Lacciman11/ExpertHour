@@ -6,6 +6,7 @@ import Payment from "../models/Payment.js";
 import User from "../models/User.js";
 import googleCalendarService from "./google-calendar.service.js";
 import emailOutboxService from "./email-outbox.service.js";
+import domainNotificationEmitter from "./domain-notification.emitter.js";
 import {
     EMAIL_TEMPLATE_ID,
     NOTIFICATION_CATEGORY,
@@ -801,7 +802,8 @@ class PaymentService {
      * @param {string} reference - Application payment reference (Payment.reference)
      * @returns {Object} Reconciliation result with payment, booking, and status
      */
-    async reconcilePayment(reference, correlationId) {
+    async reconcilePayment(reference, correlationId, options = {}) {
+        const { skipClaim = false } = options;
 
         paymentLogger.setContext({ correlationId });
 
@@ -853,100 +855,104 @@ class PaymentService {
         }
 
         // 4. If another request is already processing this payment, return processing state.
-        if (payment.status === "processing") {
-
+        // Skip this check when skipClaim is true (manual recovery already claimed).
+        if (!skipClaim && payment.status === "processing") {
+ 
             paymentLogger.info("payment_reconciliation_skipped_processing", {
-
+ 
                 event: "payment_reconciliation_skipped_processing",
-
+ 
                 reference,
-
+ 
                 bookingId: booking._id.toString(),
-
+ 
             });
-
+ 
             return {
-
+ 
                 success: false,
-
+ 
                 payment,
-
+ 
                 booking,
-
+ 
                 reason: "Payment is currently being processed",
-
+ 
                 status: "processing",
-
+ 
             };
-
+ 
         }
-
+ 
         // 5. Atomically claim the payment for processing.
         // Only a payment in "pending" state can be claimed.
         // This prevents concurrent reconciliation from both succeeding.
-        const claimed = await Payment.findOneAndUpdate(
-            { reference, status: "pending" },
-            {
-                $set: {
-                    status: "processing",
-                    processingStartedAt: new Date(),
+        // Skip when skipClaim is true (manual recovery already claimed).
+        if (!skipClaim) {
+            const claimed = await Payment.findOneAndUpdate(
+                { reference, status: "pending" },
+                {
+                    $set: {
+                        status: "processing",
+                        processingStartedAt: new Date(),
+                    }
+                },
+                { new: true }
+            );
+ 
+            if (!claimed) {
+ 
+                // Claim failed — another request claimed it, or state changed.
+                // Re-fetch to determine current state.
+                const refreshed = await Payment.findOne({ reference });
+ 
+                if (!refreshed) {
+ 
+                    throw new PaymentError("Payment record not found for this reference", "not_found");
+ 
                 }
-            },
-            { new: true }
-        );
-
-        if (!claimed) {
-
-            // Claim failed — another request claimed it, or state changed.
-            // Re-fetch to determine current state.
-            const refreshed = await Payment.findOne({ reference });
-
-            if (!refreshed) {
-
-                throw new PaymentError("Payment record not found for this reference", "not_found");
-
-            }
-
-            if (refreshed.status === "success") {
-
+ 
+                if (refreshed.status === "success") {
+ 
+                    return {
+ 
+                        success: true,
+ 
+                        payment: refreshed,
+ 
+                        booking,
+ 
+                        meetingLink: booking.meetingLink,
+ 
+                        alreadyVerified: true,
+ 
+                    };
+ 
+                }
+ 
                 return {
-
-                    success: true,
-
+ 
+                    success: false,
+ 
                     payment: refreshed,
-
+ 
                     booking,
-
-                    meetingLink: booking.meetingLink,
-
-                    alreadyVerified: true,
-
+ 
+                    reason: "Payment is currently being processed by another request",
+ 
+                    status: "processing",
+ 
                 };
-
+ 
             }
-
-            return {
-
-                success: false,
-
-                payment: refreshed,
-
-                booking,
-
-                reason: "Payment is currently being processed by another request",
-
-                status: "processing",
-
-            };
-
+ 
+            // We now own the processing claim.
+            payment.status = "processing";
+            payment.processingStartedAt = new Date();
+            payment.reconciliationAttempts += 1;
+            payment.lastReconciliationAttemptAt = new Date();
+            await payment.save();
         }
-
-        // We now own the processing claim.
-        payment.status = "processing";
-        payment.processingStartedAt = new Date();
-        payment.reconciliationAttempts += 1;
-        payment.lastReconciliationAttemptAt = new Date();
-        await payment.save();
 
         try {
 
@@ -1046,6 +1052,11 @@ class PaymentService {
                 await booking.save();
 
                 await this._sendPaymentFailureEmails(booking, reference, correlationId);
+
+                // Persist the in-app notification for the client. Failure-isolated:
+                // a notification failure must not reverse the terminal payment state
+                // or prevent the failure emails from being queued.
+                await this._sendPaymentFailureNotification(booking, payment, reference);
 
                 paymentLogger.info("payment_reconciliation_terminal_failure", {
 
@@ -1196,6 +1207,12 @@ class PaymentService {
             // Do NOT put external calls inside the MongoDB transaction.
             const meetingLink = booking.meetingLink;
 
+            // Persist the in-app success notification for the client. This runs
+            // AFTER the MongoDB transaction committed, so a notification failure
+            // can never reverse the success state. Failure-isolated: it cannot
+            // block the existing success-email path below.
+            await this._sendPaymentSuccessNotification(booking, payment);
+
             // 17. Send email notifications after DB commit.
             await this._sendPaymentSuccessEmails(booking, meetingLink, reference, correlationId);
 
@@ -1263,6 +1280,166 @@ class PaymentService {
 
     }
 
+    async manualReconcilePayment(reference, adminId, correlationId) {
+        paymentLogger.setContext({ correlationId });
+
+        const PaymentRecoveryAudit = (await import("../models/PaymentRecoveryAudit.js")).default;
+
+        // 1. Find the Payment by reference.
+        const payment = await Payment.findOne({ reference });
+
+        if (!payment) {
+            // Write audit record for not-found
+            try {
+                await PaymentRecoveryAudit.create({
+                    paymentReference: reference,
+                    paymentId: null,
+                    initiatedBy: adminId,
+                    outcome: "not_found",
+                    reason: "Payment record not found for this reference",
+                });
+            } catch (auditError) {
+                paymentLogger.error("payment_recovery_audit_write_failed", {
+                    event: "payment_recovery_audit_write_failed",
+                    error: auditError.message,
+                });
+            }
+            throw new PaymentError("Payment record not found for this reference", "not_found");
+        }
+
+        const booking = await Booking.findById(payment.bookingId);
+
+        if (!booking) {
+            throw new PaymentError("Booking not found for this payment", "not_found");
+        }
+
+        const attemptsBefore = payment.reconciliationAttempts || 0;
+
+        // 2. Reject terminal payments.
+        if (["success", "failed", "abandoned"].includes(payment.status)) {
+            try {
+                await PaymentRecoveryAudit.create({
+                    paymentReference: reference,
+                    paymentId: payment._id,
+                    initiatedBy: adminId,
+                    outcome: "terminal",
+                    reason: `Payment is in terminal state: ${payment.status}`,
+                    reconciliationAttemptsBefore: attemptsBefore,
+                    reconciliationAttemptsAfter: attemptsBefore,
+                });
+            } catch (auditError) {
+                paymentLogger.error("payment_recovery_audit_write_failed", {
+                    event: "payment_recovery_audit_write_failed",
+                    error: auditError.message,
+                });
+            }
+            throw new PaymentError(`Cannot recover payment in terminal state: ${payment.status}`, "terminal");
+        }
+
+        // 3. Check active processing (stale timeout policy).
+        const now = new Date();
+        const processingTimeoutMs = env.paymentReconciliation.processingTimeoutMs;
+        if (payment.status === "processing" && payment.processingStartedAt) {
+            const elapsed = now.getTime() - new Date(payment.processingStartedAt).getTime();
+            if (elapsed < processingTimeoutMs) {
+                try {
+                    await PaymentRecoveryAudit.create({
+                        paymentReference: reference,
+                        paymentId: payment._id,
+                        initiatedBy: adminId,
+                        outcome: "processing",
+                        reason: "Payment is actively being processed",
+                        reconciliationAttemptsBefore: attemptsBefore,
+                        reconciliationAttemptsAfter: attemptsBefore,
+                    });
+                } catch (auditError) {
+                    paymentLogger.error("payment_recovery_audit_write_failed", {
+                        event: "payment_recovery_audit_write_failed",
+                        error: auditError.message,
+                    });
+                }
+                throw new PaymentError("Payment is currently being processed", "processing");
+            }
+        }
+
+        // 4. Atomically claim with reset.
+        const claimed = await Payment.findOneAndUpdate(
+            { reference, status: { $in: ["pending", "processing"] } },
+            {
+                $set: {
+                    status: "processing",
+                    processingStartedAt: new Date(),
+                    reconciliationAttempts: 0,
+                    lastReconciliationAttemptAt: new Date(),
+                },
+            },
+            { new: true }
+        );
+
+        if (!claimed) {
+            const refreshed = await Payment.findOne({ reference });
+            try {
+                await PaymentRecoveryAudit.create({
+                    paymentReference: reference,
+                    paymentId: payment._id,
+                    initiatedBy: adminId,
+                    outcome: "processing",
+                    reason: "Claim failed — another request claimed the payment",
+                    reconciliationAttemptsBefore: attemptsBefore,
+                    reconciliationAttemptsAfter: refreshed ? (refreshed.reconciliationAttempts || 0) : attemptsBefore,
+                });
+            } catch (auditError) {
+                paymentLogger.error("payment_recovery_audit_write_failed", {
+                    event: "payment_recovery_audit_write_failed",
+                    error: auditError.message,
+                });
+            }
+            throw new PaymentError("Payment is currently being processed by another request", "processing");
+        }
+
+        // 5. Reuse existing reconciliation logic (skip claim since we already claimed).
+        let result;
+        let outcome = "error";
+        let reason = null;
+        try {
+            result = await this.reconcilePayment(reference, correlationId, { skipClaim: true });
+            outcome = result.success ? "success" : (result.status === "pending" ? "skipped" : "failed");
+            reason = result.reason || null;
+        } catch (error) {
+            outcome = "error";
+            reason = error.message;
+            // Revert to pending on failure
+            if (claimed.status === "processing") {
+                claimed.status = "pending";
+                claimed.processingStartedAt = null;
+                await claimed.save();
+            }
+            throw error;
+        } finally {
+            // 6. Write audit record (failure-isolated).
+            try {
+                const updatedPayment = await Payment.findOne({ reference });
+                await PaymentRecoveryAudit.create({
+                    paymentReference: reference,
+                    paymentId: payment._id,
+                    initiatedBy: adminId,
+                    outcome,
+                    reason,
+                    reconciliationAttemptsBefore: attemptsBefore,
+                    reconciliationAttemptsAfter: updatedPayment ? (updatedPayment.reconciliationAttempts || 0) : 0,
+                });
+            } catch (auditError) {
+                paymentLogger.error("payment_recovery_audit_write_failed", {
+                    event: "payment_recovery_audit_write_failed",
+                    error: auditError.message,
+                });
+            }
+        }
+
+        return result;
+ 
+    }
+ 
     async verifyPayment(reference, userId, correlationId) {
 
         paymentLogger.setContext({ correlationId });
@@ -1878,6 +2055,116 @@ class PaymentService {
 
         }
 
+    }
+
+    /**
+     * Persist the in-app notification for a successfully reconciled payment.
+     *
+     * Mirrors _sendPaymentFailureNotification: recipient is the client
+     * (booking.clientId) — the business owner who paid. The consultant is
+     * deliberately NOT notified in-app; the consultant still receives the
+     * existing success email via _sendPaymentSuccessEmails.
+     *
+     * Emitted ONLY after the MongoDB transaction has committed the success
+     * state, so this can never reverse a committed payment. Failure-isolated:
+     * the domain emitter swallows any persistence failure and logs
+     * `domain_notification_failed`, and a defensive guard logs
+     * `payment_success_notification_emit_failed`.
+     *
+     * Dedupe key is derived by the emitter as
+     * `payment.success:<clientId>:<bookingId>`, so webhook retries and
+     * reconciliation re-runs cannot create duplicate notifications.
+     *
+     * @param {object} booking - Booking document (needs _id, clientId)
+     * @param {object} payment - Payment document (needs _id)
+     * @private
+     */
+    async _sendPaymentSuccessNotification(booking, payment) {
+        if (!booking || !booking.clientId) {
+            return;
+        }
+
+        try {
+            await domainNotificationEmitter.emitToRecipients({
+                category: NOTIFICATION_CATEGORY.PAYMENT,
+                type: "payment.success",
+                subjectId: booking._id.toString(),
+                recipients: [
+                    {
+                        recipientId: booking.clientId,
+                        title: "Payment successful",
+                        body: "Your payment has been confirmed.",
+                        data: {
+                            bookingId: booking._id,
+                            paymentId: payment._id,
+                            deepLinkPath: "/dashboard/client/payments",
+                        },
+                    },
+                ],
+            });
+        } catch (error) {
+            // The domain emitter already swallows failures; this catch is a
+            // defensive guard so a throw here can never escape the caller.
+            paymentLogger.error("payment_success_notification_emit_failed", {
+                event: "payment_success_notification_emit_failed",
+                bookingId: booking?._id?.toString(),
+                error: error?.message || error,
+            });
+        }
+    }
+
+    /**
+     * Persist the in-app notification for a terminally failed payment.
+     *
+     * Recipient is the client (booking.clientId) — the business owner who
+     * paid. The consultant is deliberately NOT notified in-app about a client's
+     * failed payment; the consultant still receives the existing failure email
+     * via _sendPaymentFailureEmails.
+     *
+     * Failure-isolated: the domain emitter swallows any persistence failure
+     * and logs `domain_notification_failed`, so this can never reverse the
+     * terminal payment state or block the failure emails.
+     *
+     * Dedupe key is stable per failed payment, so a webhook retry or a
+     * reconciliation re-run cannot create a duplicate notification.
+     *
+     * @param {object} booking - Booking document (needs _id, clientId)
+     * @param {object} payment - Payment document (needs _id)
+     * @param {string} reference - application payment reference
+     * @private
+     */
+    async _sendPaymentFailureNotification(booking, payment, reference) {
+        if (!booking || !booking.clientId) {
+            return;
+        }
+
+        try {
+            await domainNotificationEmitter.emitToRecipients({
+                category: NOTIFICATION_CATEGORY.PAYMENT,
+                type: "payment.failed",
+                subjectId: booking._id.toString(),
+                recipients: [
+                    {
+                        recipientId: booking.clientId,
+                        title: "Payment failed",
+                        body: "We were unable to process your payment. Please review your payment details and try again.",
+                        data: {
+                            bookingId: booking._id,
+                            paymentId: payment._id,
+                            deepLinkPath: "/dashboard/client/payments",
+                        },
+                    },
+                ],
+            });
+        } catch (error) {
+            // The domain emitter already swallows failures; this catch is a
+            // defensive guard so a throw here can never escape the caller.
+            paymentLogger.error("payment_failure_notification_emit_failed", {
+                event: "payment_failure_notification_emit_failed",
+                bookingId: booking?._id?.toString(),
+                error: error?.message || error,
+            });
+        }
     }
 
     /**

@@ -147,8 +147,11 @@ class BookingService {
         const priceInKobo = Math.round(profile.hourlyRate * duration * 100 / 60);
 
         // --- Availability checks ---
-        const requestedDate = new Date(date);
-        const dayOfWeek = requestedDate.getDay();
+        // Use Africa/Lagos calendar day for consistency with slot generation
+        const requestedDate = new Date(`${date}T00:00:00${APP_TIMEZONE_UTC_OFFSET}`);
+        const weekday = new Intl.DateTimeFormat('en-US', { timeZone: APP_TIMEZONE, weekday: 'short' }).format(requestedDate);
+        const dayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+        const dayOfWeek = dayMap[weekday] !== undefined ? dayMap[weekday] : requestedDate.getDay();
 
         // Use embedded availability slots
         const availabilitySlots = profile.availabilitySlots.filter(
@@ -156,7 +159,7 @@ class BookingService {
         );
 
         if (availabilitySlots.length === 0) {
-            throw new Error("Consultant is not available on this date");
+            throw new ApiError(400, "Consultant is not available on this date");
         }
 
         // Check if the requested time falls within any availability slot

@@ -347,6 +347,18 @@ export const reconcileRefund = asyncHandler(async (req, res) => {
     try {
 
         const result = await refundService.reconcileRefundWithPaystack(paymentId);
+        try {
+            if (result.reconciled) {
+                const Payment = (await import("../models/Payment.js")).default;
+                const payment = await Payment.findById(paymentId);
+                if (payment && payment.refundReference && payment.refundReference.startsWith("DISP-")) {
+                    const disputeService = (await import("../services/dispute.service.js")).default;
+                    await disputeService.finalizeDisputeFromReconciliation(payment.refundReference);
+                }
+            }
+        } catch (err) {
+            // ignore
+        }
 
         return res.status(200).json(
 

@@ -4,6 +4,7 @@ import app from "./app.js";
 
 import consultationSessionOutcomeService from "./services/consultation-session-outcome.service.js";
 import consultationSessionFinancialWorker from "./services/consultation-session-financial.worker.js";
+import disputeFinancialWorker from "./services/dispute-financial.worker.js";
 import earningEligibilityService from "./services/earning-eligibility.service.js";
 import paymentReconciliationService from "./services/payment-reconciliation.service.js";
 import refundReconciliationService from "./services/refund-reconciliation.service.js";
@@ -65,6 +66,9 @@ function startWorkers() {
 
     // Financial worker: outcome → financial consequence
     consultationSessionFinancialWorker.start();
+
+    // Dispute financial worker: resolved disputes → financial processing
+    disputeFinancialWorker.start();
 
     // Earning eligibility worker: PENDING → ELIGIBLE after 24h
     earningEligibilityService.start();
@@ -261,6 +265,7 @@ async function gracefulShutdown(signal) {
         await runCleanupStep("workers", () => {
             consultationSessionOutcomeService.stop();
             consultationSessionFinancialWorker.stop();
+            disputeFinancialWorker.stop();
             earningEligibilityService.stop();
             paymentReconciliationService.stop();
             refundReconciliationService.stop();

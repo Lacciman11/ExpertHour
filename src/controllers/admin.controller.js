@@ -3,6 +3,7 @@ import asyncHandler from "../utils/asyncHandler.js";
 import ApiResponse from "../utils/ApiResponse.js";
 
 import adminService from "../services/admin.service.js";
+import paymentService from "../services/payment.service.js";
 
 export const getDashboardStats = asyncHandler(async (req, res) => {
 
@@ -314,21 +315,21 @@ export const activateConsultant = asyncHandler(async (req, res) => {
 });
 
 export const changeUserRole = asyncHandler(async (req, res) => {
-
+ 
     const { userId } = req.params;
     const { role } = req.body;
-
+ 
     const user = await adminService.changeUserRole(userId, role);
-
+ 
     if (!user) {
-
+ 
         return res.status(404).json({
             success: false,
             message: "User not found",
         });
-
+ 
     }
-
+ 
     return res.status(200).json(
         new ApiResponse(
             200,
@@ -336,5 +337,34 @@ export const changeUserRole = asyncHandler(async (req, res) => {
             "User role updated successfully"
         )
     );
+ 
+});
 
+export const getPaymentRecoveryReport = asyncHandler(async (req, res) => {
+
+    const page = parseInt(req.query.page || "1", 10);
+    const limit = parseInt(req.query.limit || "20", 10);
+
+    const result = await adminService.getPaymentRecoveryReport({ page, limit });
+
+    return res.status(200).json(
+        new ApiResponse(200, result, "Payment recovery report fetched successfully")
+    );
+
+});
+
+export const manualReconcilePayment = asyncHandler(async (req, res) => {
+ 
+    const { reference } = req.params;
+ 
+    const result = await paymentService.manualReconcilePayment(reference, req.user._id, req.correlationId);
+ 
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            result,
+            "Payment reconciliation initiated"
+        )
+    );
+ 
 });

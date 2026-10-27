@@ -876,6 +876,46 @@ class ConsultantEarningService {
         const count = await ConsultantEarning.countDocuments({ bookingId });
         return count > 0;
     }
+
+    async verifyEarningConsistency(earningId = null, page = 1, limit = 50) {
+        const mismatches = [];
+        let checked = 0;
+        const query = earningId ? { _id: earningId } : {};
+        const earnings = await ConsultantEarning.find(query).skip((page - 1) * limit).limit(limit).lean();
+        for (const e of earnings) {
+            checked += 1;
+            const gross = e.grossAmount || 0;
+            const commission = e.platformCommission || 0;
+            const net = e.consultantEntitlement || 0;
+            const expected = commission + net;
+            if (Math.abs(gross - expected) > 1) {
+                mismatches.push({ earningId: e._id, field: "grossAmount", expected, actual: gross, severity: "critical" });
+            }
+            if ((e.recoveredAmount || 0) > (e.recoveryAmount || 0)) {
+                mismatches.push({ earningId: e._id, field: "recoveredAmount", expected: e.recoveryAmount, actual: e.recoveredAmount, severity: "critical" });
+            }
+            if ((e.recoveryAmount || 0) > (e.consultantEntitlement || 0) && (e.consultantEntitlement || 0) > 0) {
+                mismatches.push({ earningId: e._id, field: "recoveryAmount", expected: e.consultantEntitlement, actual: e.recoveryAmount, severity: "critical" });
+            }
+            const refs = (e.recoveryHistory || []).map((r) => r.refundReference).filter(Boolean);
+            const seen = new Set();
+            for (const r of refs) {
+                if (seen.has(r)) {
+                    mismatches.push({ earningId: e._id, field: "recoveryHistory.refundReference", expected: "unique", actual: r, severity: "warning" });
+                }
+                seen.add(r);
+            }
+            if (e.paymentId) {
+                const payment = await Payment.findById(e.paymentId).lean();
+                if (!payment) {
+                    mismatches.push({ earningId: e._id, field: "paymentId", expected: "existing payment", actual: null, severity: "warning" });
+                } else if (e.status === EARNING_STATUS.PAID && payment.status !== "success") {
+                    mismatches.push({ earningId: e._id, field: "status", expected: "payment success", actual: payment.status, severity: "critical" });
+                }
+            }
+        }
+        return { checked, mismatches, page, limit };
+    }
 }
 
 // ---------------------------------------------------------------------------
