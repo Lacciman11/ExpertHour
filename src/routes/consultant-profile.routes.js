@@ -52,6 +52,73 @@ router.get(
 // Get consultant profile by ID (public)
 router.get("/id/:id", getConsultantProfileById);
 
+/*
+|--------------------------------------------------------------------------
+| Protected Routes (CONSULTANT only) - Fixed paths first
+|--------------------------------------------------------------------------
+*/
+
+const authConsultant = [authenticate({ skipEmailVerification: true }), authorize("CONSULTANT")];
+
+// Availability slots (embedded in profile) - must be before public parameterized routes
+router.get("/availability", ...authConsultant, getMyAvailabilitySlots);
+router.post("/availability", ...authConsultant, setMyAvailabilitySlots);
+router.delete("/availability/:slotId", ...authConsultant, deleteMyAvailabilitySlot);
+
+// Create consultant profile
+router.post(
+    "/profile",
+    ...authConsultant,
+    createConsultantProfileValidator,
+    validate,
+    createConsultantProfile
+);
+
+// Get my consultant profile
+router.get("/profile", ...authConsultant, getMyConsultantProfile);
+
+// Update my consultant profile
+router.patch(
+    "/profile",
+    ...authConsultant,
+    updateConsultantProfileValidator,
+    validate,
+    updateConsultantProfile
+);
+
+// Get my payout settings
+router.get("/payout-settings", ...authConsultant, getMyPayoutSettings);
+
+// Update my payout settings
+router.patch(
+    "/payout-settings",
+    ...authConsultant,
+    updatePayoutSettingsValidator,
+    validate,
+    updateMyPayoutSettings
+);
+
+// Get bank list
+router.get("/payout-settings/banks", ...authConsultant, getBanks);
+
+// Verify bank account
+router.get(
+    "/payout-settings/verify-account",
+    ...authConsultant,
+    verifyAccountValidator,
+    validate,
+    verifyAccount
+);
+
+// Delete my consultant profile
+router.delete("/profile", ...authConsultant, deleteConsultantProfile);
+
+/*
+|--------------------------------------------------------------------------
+| Public Routes (parameterized) - after protected fixed routes
+|--------------------------------------------------------------------------
+*/
+
 // Get public availability slots for a consultant (public)
 router.get("/:id/availability", getPublicAvailabilitySlots);
 
@@ -62,67 +129,5 @@ router.get(
     validate,
     getAvailableSlotsForDate
 );
-
-/*
-|--------------------------------------------------------------------------
-| Protected Routes (CONSULTANT only)
-|--------------------------------------------------------------------------
-*/
-
-const protectedRouter = Router();
-
-protectedRouter.use(authenticate({ skipEmailVerification: true }));
-protectedRouter.use(authorize("CONSULTANT"));
-
-// Create consultant profile
-protectedRouter.post(
-    "/profile",
-    createConsultantProfileValidator,
-    validate,
-    createConsultantProfile
-);
-
-// Get my consultant profile
-protectedRouter.get("/profile", getMyConsultantProfile);
-
-// Update my consultant profile
-protectedRouter.patch(
-    "/profile",
-    updateConsultantProfileValidator,
-    validate,
-    updateConsultantProfile
-);
-
-// Get my payout settings
-protectedRouter.get("/payout-settings", getMyPayoutSettings);
-
-// Update my payout settings
-protectedRouter.patch(
-    "/payout-settings",
-    updatePayoutSettingsValidator,
-    validate,
-    updateMyPayoutSettings
-);
-
-// Get bank list
-protectedRouter.get("/payout-settings/banks", getBanks);
-
-// Verify bank account
-protectedRouter.get(
-    "/payout-settings/verify-account",
-    verifyAccountValidator,
-    validate,
-    verifyAccount
-);
-
-// Delete my consultant profile
-protectedRouter.delete("/profile", deleteConsultantProfile);
-
-// Availability slots (embedded in profile)
-protectedRouter.get("/availability", getMyAvailabilitySlots);
-protectedRouter.post("/availability", setMyAvailabilitySlots);
-protectedRouter.delete("/availability/:slotId", deleteMyAvailabilitySlot);
-
-router.use(protectedRouter);
 
 export default router;
