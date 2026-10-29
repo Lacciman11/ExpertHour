@@ -688,6 +688,19 @@ class BookingService {
         // Validate booking can be cancelled
         this._validateCancellationEligibility(booking);
 
+        // Enforce 36-hour restriction for business-owner (client) cancellations
+        if (cancelActor === "client") {
+            const now = this._getCurrentTime();
+            const sessionStartTime = this._getSessionStartTime(booking.date, booking.time);
+            const remainingMs = sessionStartTime.getTime() - now.getTime();
+            if (remainingMs < CANCELLATION_WINDOW_MS) {
+                throw new ApiError(
+                    400,
+                    "This session can only be cancelled at least 36 hours before its scheduled start time."
+                );
+            }
+        }
+
         // Validate cancellation reason is provided
         if (!reason || typeof reason !== "string" || reason.trim().length === 0) {
             throw new Error("Cancellation reason is required");

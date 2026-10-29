@@ -129,25 +129,45 @@ function validateRefundReason(reason) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Get consultation fee amount from payment (for commission/refund base).
+ * Prefers consultationFeeAmount if set, otherwise falls back to booking/payment base.
+ * @param {object} payment - The Payment document
+ * @returns {number} Consultation fee in kobo
+ */
+export function getConsultationFeeAmount(payment) {
+    if (!payment) {
+        return 0;
+    }
+    if (payment.consultationFeeAmount !== undefined && payment.consultationFeeAmount !== null) {
+        return Number(payment.consultationFeeAmount);
+    }
+    // Fallback for backward compatibility
+    return Number(payment.amount || 0);
+}
+
+/**
  * Calculate remaining refundable amount for an earning.
  * For earnings with positive grossAmount, the refundable amount is bounded
  * by the earning's grossAmount. For CANCELLED/zero-grossAmount earnings
  * (e.g., consultant-attributable session outcomes), the refundable amount
- * is bounded by the original payment amount.
+ * is bounded by the consultation fee (or payment amount as fallback).
  *
  * @param {object} earning - The ConsultantEarning document
  * @param {object} [payment] - The Payment document (optional, used for zero-grossAmount earnings)
  * @returns {number} Remaining refundable amount in kobo
  */
 function calculateRemainingRefundableAmount(earning, payment) {
-    if (earning.grossAmount > 0) {
-        return earning.grossAmount - earning.adjustmentAmount;
+    if (earning && typeof earning.grossAmount === "number" && earning.grossAmount > 0) {
+        return earning.grossAmount - (earning.adjustmentAmount || 0);
     }
-    // For CANCELLED/zero-grossAmount earnings, use payment amount as the bound.
-    // This allows system-initiated full refunds for consultant-attributable outcomes.
-    const paymentAmount = payment ? (payment.amount || 0) : 0;
+    // For CANCELLED/zero-grossAmount earnings, use consultation fee as the bound.
+    // This allows system-initiated full refunds for consultant-attributable outcomes
+    // while excluding customer-paid processing fees.
+    const consultationFeeAmount = payment ? getConsultationFeeAmount(payment) : 0;
     const paymentRefunded = payment ? (payment.refundAmount || 0) : 0;
-    return paymentAmount - paymentRefunded;
+    // For backward compatibility, if no consultationFeeAmount is set and we're dealing
+    // with legacy payments, still be conservative
+    return Math.max(0, consultationFeeAmount - paymentRefunded);
 }
 
 /**

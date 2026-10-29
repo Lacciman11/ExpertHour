@@ -498,12 +498,15 @@ class DisputeService {
         const refundService = (await import("./refund.service.js")).default;
 
         try {
-            const refundResult = await refundService.processRefundWithPaystack({
-                paymentId: payment._id,
-                bookingId: booking._id,
-                refundReference,
-                refundAmount: payment.amount,
-                reason: "DISPUTE_RESOLUTION",
+                const disputeRefundAmount = (payment.consultationFeeAmount !== undefined && payment.consultationFeeAmount !== null)
+                    ? payment.consultationFeeAmount
+                    : payment.amount;
+                const refundResult = await refundService.processRefundWithPaystack({
+                    paymentId: payment._id,
+                    bookingId: booking._id,
+                    refundReference,
+                    refundAmount: disputeRefundAmount,
+                    reason: "DISPUTE_RESOLUTION",
                 adminId: dispute.resolvedBy || dispute.openedBy,
             });
 

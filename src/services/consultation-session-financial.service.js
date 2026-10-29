@@ -297,9 +297,11 @@ class ConsultationSessionFinancialService {
         // -------------------------------------------------------------------
         let refundResult = null;
         if (action.refund && payment) {
-            // Refund amount = original customer payment amount (authoritative
-            // payment snapshot in kobo). Do NOT calculate from hourlyRate.
-            const refundAmount = payment.amount;
+            // Refund amount = consultation fee only (authoritative payment snapshot in kobo).
+            // Do NOT include customer-paid processing fees; do NOT calculate from hourlyRate.
+            const refundAmount = (payment.consultationFeeAmount !== undefined && payment.consultationFeeAmount !== null)
+                ? payment.consultationFeeAmount
+                : payment.amount;
 
             // Generate a deterministic refund reference for idempotency.
             // Format: FIN-{bookingId}-{outcome}

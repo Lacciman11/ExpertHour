@@ -35,15 +35,15 @@ router.get(
 );
 
 router.get(
-    "/:id",
-    authorize("CONSULTANT"),
-    getMyEarningById
-);
-
-router.get(
     "/export",
     authorize("CONSULTANT"),
     exportMyEarnings
+);
+
+router.get(
+    "/:id",
+    authorize("CONSULTANT"),
+    getMyEarningById
 );
 
 /*

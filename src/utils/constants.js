@@ -89,11 +89,11 @@ export const ADJUSTMENT_REASON = Object.freeze({
 });
 
 export const PLATFORM_COMMISSION_RATE = Object.freeze({
-    DEFAULT: 0.15, // 15%
+    DEFAULT: 0.18, // 18%
 });
 
 export const CONSULTANT_SHARE_RATE = Object.freeze({
-    DEFAULT: 0.85, // 85%
+    DEFAULT: 0.82, // 82%
 });
 
 // ---------------------------------------------------------------------------

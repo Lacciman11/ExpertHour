@@ -37,12 +37,44 @@ const paymentSchema = new mongoose.Schema(
 
         /**
          * Payment amount in kobo (smallest NGN unit).
+         * When customer pays processing fees, this represents the total charged to the customer.
+         * Use consultationFeeAmount for commission/consultant entitlement calculations.
          * @type {number} Integer kobo value (e.g., 5000000 = ₦50,000)
          */
         amount: {
             type: Number,
             required: [true, "Amount is required"],
             min: [0, "Amount cannot be negative"],
+        },
+
+        /**
+         * Consultation fee in kobo (base amount before processing fees).
+         * Used for commission calculation (18% platform, 82% consultant).
+         */
+        consultationFeeAmount: {
+            type: Number,
+            default: null,
+            min: [0, "Consultation fee cannot be negative"],
+        },
+
+        /**
+         * Paystack processing fee charged to customer in kobo.
+         * May be unavailable if not provided by Paystack.
+         */
+        processingFeeAmount: {
+            type: Number,
+            default: null,
+            min: [0, "Processing fee cannot be negative"],
+        },
+
+        /**
+         * Total amount charged to customer in kobo (consultation + processing fees if applicable).
+         * Falls back to amount if not set.
+         */
+        totalAmountCharged: {
+            type: Number,
+            default: null,
+            min: [0, "Total amount charged cannot be negative"],
         },
 
         /**

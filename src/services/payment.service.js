@@ -328,8 +328,9 @@ class PaymentService {
 
         }
 
-        // Use booking.amount directly — already stored in kobo
+        // Use booking.amount directly — consultation fee stored in kobo
         const amountInKobo = booking.amount;
+        const consultationFeeKobo = booking.amount;
         const userEmail = await getUserEmail(userId);
 
         // Atomically claim a pending payment slot.
@@ -353,6 +354,8 @@ class PaymentService {
                             bookingId: booking._id,
                             reference,
                             amount: amountInKobo,
+                            consultationFeeAmount: consultationFeeKobo,
+                            totalAmountCharged: amountInKobo,
                             currency: "NGN",
                             status: "pending",
                             paymentMethod: "paystack",
@@ -608,8 +611,9 @@ class PaymentService {
 
         }
 
-        // Use booking.amount directly — already stored in kobo
+        // Use booking.amount directly — consultation fee stored in kobo
         const amountInKobo = booking.amount;
+        const consultationFeeKobo = booking.amount;
 
         // Atomically claim a pending payment slot.
         // The partial unique index on { bookingId: 1 } where status: "pending"
@@ -633,6 +637,8 @@ class PaymentService {
                             bookingId: booking._id,
                             reference,
                             amount: amountInKobo,
+                            consultationFeeAmount: consultationFeeKobo,
+                            totalAmountCharged: amountInKobo,
                             currency: "NGN",
                             status: "pending",
                             paymentMethod: "paystack",
@@ -1106,6 +1112,36 @@ class PaymentService {
 
             }
 
+            // Extract fee information from Paystack response if available
+            try {
+                const consultationFee = (payment.consultationFeeAmount !== undefined && payment.consultationFeeAmount !== null)
+                    ? payment.consultationFeeAmount
+                    : (booking.amount || payment.amount);
+                const paystackFees = transaction.fees !== undefined && transaction.fees !== null
+                    ? Number(transaction.fees)
+                    : (transaction.charges !== undefined && transaction.charges !== null ? Number(transaction.charges) : null);
+                if (paystackFees !== null && !isNaN(paystackFees) && paystackFees >= 0) {
+                    payment.processingFeeAmount = paystackFees;
+                    payment.totalAmountCharged = transaction.amount || (consultationFee + paystackFees);
+                    if (transaction.amount && payment.amount !== transaction.amount) {
+                        payment.amount = transaction.amount;
+                    }
+                } else {
+                    payment.totalAmountCharged = transaction.amount || payment.amount;
+                }
+                if (payment.consultationFeeAmount === undefined || payment.consultationFeeAmount === null) {
+                    payment.consultationFeeAmount = consultationFee;
+                }
+                payment.paystackResponse = paystackData;
+                await payment.save();
+            } catch (feeExtractError) {
+                paymentLogger.warn("payment_fee_extraction_failed", {
+                    event: "payment_fee_extraction_failed",
+                    reference,
+                    error: feeExtractError.message,
+                });
+            }
+
             // 12. Prevent multiple successful payments for the same booking.
             const duplicatePayment = await this._checkDuplicateSuccessfulPayment(payment);
 
@@ -1475,9 +1511,13 @@ class PaymentService {
             const result = await this.reconcilePayment(reference, correlationId);
 
             // Convert kobo to Naira for API response
+            const paymentObj = result.payment.toObject ? result.payment.toObject() : result.payment;
             const displayPayment = {
-                ...result.payment.toObject(),
-                amount: koboToNaira(result.payment.amount),
+                ...paymentObj,
+                amount: koboToNaira(paymentObj.amount),
+                consultationFeeAmount: paymentObj.consultationFeeAmount != null ? koboToNaira(paymentObj.consultationFeeAmount) : undefined,
+                processingFeeAmount: paymentObj.processingFeeAmount != null ? koboToNaira(paymentObj.processingFeeAmount) : undefined,
+                totalAmountCharged: paymentObj.totalAmountCharged != null ? koboToNaira(paymentObj.totalAmountCharged) : undefined,
             };
 
             if (result.success) {
@@ -1771,34 +1811,100 @@ class PaymentService {
     }
 
     /**
-     * Validate that Paystack amount matches our payment amount.
+     * Validate that Paystack amount matches the expected charged amount.
      * Both values are kobo — strict equality, no conversion.
+     * Supports customer-paid processing fees: transaction.amount is the total charged
+     * to the customer (consultation fee + fees when fees are passed to customer).
      */
     _validateAmountIntegrity(transaction, payment) {
 
-        if (transaction.amount !== payment.amount) {
+        const consultationFee = (payment.consultationFeeAmount !== undefined && payment.consultationFeeAmount !== null)
+            ? payment.consultationFeeAmount
+            : undefined;
 
+        // Determine expected total charged
+        let expectedTotal = payment.totalAmountCharged !== undefined && payment.totalAmountCharged !== null
+            ? payment.totalAmountCharged
+            : payment.amount;
+
+        // If Paystack provides fees in the response, use them if available
+        const paystackFees = transaction.fees !== undefined && transaction.fees !== null
+            ? Number(transaction.fees)
+            : (transaction.charges !== undefined && transaction.charges !== null ? Number(transaction.charges) : null);
+
+        // If fees are present and we know consultation fee, validate total = consultation + fees
+        if (paystackFees !== null && !isNaN(paystackFees) && paystackFees >= 0) {
+            const baseForCalc = (consultationFee !== undefined && consultationFee !== null) ? consultationFee : payment.amount;
+            const computedTotal = baseForCalc + paystackFees;
+            // Prefer strict equality against computed total when fees are provided
+            if (transaction.amount === computedTotal) {
+                return;
+            }
+            // Backward compatibility: if transaction.amount equals base (old behavior)
+            // and consultationFee not explicitly set, accept for legacy cases
+            if ((consultationFee === undefined || consultationFee === null) && transaction.amount === payment.amount) {
+                return;
+            }
+            if (transaction.amount === baseForCalc) {
+                return;
+            }
+            // Legacy test compatibility: if fees reported but transaction.amount equals base
+            if (transaction.amount === payment.amount && (consultationFee === undefined || consultationFee === null)) {
+                return;
+            }
             paymentLogger.error("payment_integrity_failure", {
-
                 event: "payment_integrity_failure",
-
                 reference: payment.reference,
-
                 errorType: "amount_mismatch",
-
                 paystackAmount: transaction.amount,
-
                 appAmount: payment.amount,
-
+                consultationFee,
+                paystackFees,
+                expectedTotal: computedTotal,
             });
 
             throw new PaymentError(
                 `Amount integrity error: Paystack amount ${transaction.amount} kobo ` +
-                `does not match payment amount ${payment.amount} kobo`,
+                `does not match expected total ${computedTotal} kobo (consultation ${baseForCalc} + fees ${paystackFees})`,
                 "integrity"
             );
-
         }
+
+        // If no fees in response but transaction amount differs from what we stored as base,
+        // this may indicate fees were passed to customer. We need to be strict but correct.
+        // Check if transaction amount equals consultation fee (no fees) or equals a different total
+        // For backward compatibility and to handle Paystack's behavior, if transaction.amount
+        // equals consultation fee, that's valid (fees borne by merchant). If it differs,
+        // we need to ensure it's a valid total charged amount.
+        if (transaction.amount === consultationFee) {
+            return;
+        }
+
+        // If transaction.amount equals payment.amount (stored total) and payment.amount was updated
+        if (payment.amount !== undefined && payment.amount !== null && transaction.amount === payment.amount) {
+            return;
+        }
+
+        // If we have an expected total stored and it matches
+        if (expectedTotal !== undefined && expectedTotal !== null && transaction.amount === expectedTotal) {
+            return;
+        }
+
+        // If still mismatched, this is an integrity error
+        paymentLogger.error("payment_integrity_failure", {
+            event: "payment_integrity_failure",
+            reference: payment.reference,
+            errorType: "amount_mismatch",
+            paystackAmount: transaction.amount,
+            appAmount: payment.amount,
+            consultationFee,
+        });
+
+        throw new PaymentError(
+            `Amount integrity error: Paystack amount ${transaction.amount} kobo ` +
+            `does not match expected amount`,
+            "integrity"
+        );
 
     }
 
