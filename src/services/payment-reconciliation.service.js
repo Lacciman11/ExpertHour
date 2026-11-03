@@ -3,6 +3,7 @@ import Payment from "../models/Payment.js";
 import paymentService from "./payment.service.js";
 import env from "../config/env.js";
 import paymentLogger from "../utils/logger.js";
+import domainEmitter from "./domain-notification.emitter.js";
 
 const {
     intervalMs,
@@ -333,6 +334,25 @@ class PaymentReconciliationService {
                 maxReached,
             });
 
+            // Emit operational admin alerts for this cycle. Best-effort and
+            // fully failure-isolated: a delivery failure is logged and never
+            // interrupts the reconciliation cycle or its metrics.
+            await this._emitCycleAlerts({
+                cycleStart,
+                cycleDuration,
+                processed,
+                succeeded,
+                failed,
+                reconciled,
+                alreadyVerified,
+                skippedProcessing,
+                deferred,
+                terminalFailures,
+                transientErrors,
+                unexpectedErrors,
+                maxReached,
+            });
+
         } catch (error) {
 
             paymentLogger.error("reconciliation_cycle_failed", {
@@ -412,6 +432,111 @@ class PaymentReconciliationService {
 
         return candidates.slice(0, batchSize);
 
+    }
+
+    /**
+     * Emit operational admin alerts for the cycle's aggregate metrics.
+     *
+     * Best-effort and fully failure-isolated: `emitAdminAlert()` never throws,
+     * and this method is invoked after the cycle's structured logging so a
+     * delivery failure cannot affect reconciliation outcomes, metrics, or the
+     * worker lifecycle.
+     *
+     * Alerts are emitted only when the corresponding metric is greater than
+     * zero. The dedupe key is scoped per alert category and per cycle start so
+     * that:
+     *   - repeated emission in the same cycle deduplicates,
+     *   - different cycles produce distinct alerts,
+     *   - different alert categories never collide,
+     *   - each administrator receives their own deduplicated notification via
+     *     the existing emitter (which appends the recipient id).
+     *
+     * @param {object} metrics - the cycle metrics already computed by _runCycle
+     * @private
+     */
+    async _emitCycleAlerts(metrics) {
+        const cycleStartIso = new Date(metrics.cycleStart).toISOString();
+        const baseData = {
+            cycleStart: cycleStartIso,
+            processed: metrics.processed,
+            succeeded: metrics.succeeded,
+            failed: metrics.failed,
+            reconciled: metrics.reconciled,
+            alreadyVerified: metrics.alreadyVerified,
+            skippedProcessing: metrics.skippedProcessing,
+            deferred: metrics.deferred,
+            terminalFailures: metrics.terminalFailures,
+            transientErrors: metrics.transientErrors,
+            unexpectedErrors: metrics.unexpectedErrors,
+            maxReached: metrics.maxReached,
+        };
+
+        const alerts = [];
+
+        if (metrics.transientErrors > 0) {
+            alerts.push({
+                type: "operational.payment_reconciliation.transient_errors",
+                title: "Reconciliation cycle reported transient errors",
+                body: `Reconciliation cycle at ${cycleStartIso} encountered ${metrics.transientErrors} transient payment error(s).`,
+                severity: "warn",
+                dedupeKey: `operational:payment-reconciliation:transient_errors:${cycleStartIso}`,
+                data: { ...baseData, failureCategory: "transient" },
+            });
+        }
+
+        if (metrics.unexpectedErrors > 0) {
+            alerts.push({
+                type: "operational.payment_reconciliation.unexpected_errors",
+                title: "Reconciliation cycle reported unexpected errors",
+                body: `Reconciliation cycle at ${cycleStartIso} encountered ${metrics.unexpectedErrors} unexpected error(s).`,
+                severity: "error",
+                dedupeKey: `operational:payment-reconciliation:unexpected_errors:${cycleStartIso}`,
+                data: { ...baseData, failureCategory: "unexpected" },
+            });
+        }
+
+        if (metrics.terminalFailures > 0) {
+            alerts.push({
+                type: "operational.payment_reconciliation.terminal_failures",
+                title: "Reconciliation cycle reported terminal failures",
+                body: `Reconciliation cycle at ${cycleStartIso} recorded ${metrics.terminalFailures} terminal payment failure(s).`,
+                severity: "error",
+                dedupeKey: `operational:payment-reconciliation:terminal_failures:${cycleStartIso}`,
+                data: { ...baseData, failureCategory: "terminal" },
+            });
+        }
+
+        if (metrics.maxReached > 0) {
+            alerts.push({
+                type: "operational.payment_reconciliation.exhausted_attempts",
+                title: "Reconciliation attempts exhausted",
+                body: `Reconciliation cycle at ${cycleStartIso} found ${metrics.maxReached} payment(s) that have exhausted their maximum reconciliation attempts.`,
+                severity: "critical",
+                dedupeKey: `operational:payment-reconciliation:exhausted_attempts:${cycleStartIso}`,
+                data: {
+                    ...baseData,
+                    failureCategory: "exhausted",
+                    maxAttempts,
+                    attemptCount: maxAttempts,
+                },
+            });
+        }
+
+        for (const alert of alerts) {
+            try {
+                await domainEmitter.emitAdminAlert(alert);
+            } catch (emitError) {
+                // Defensive: emitAdminAlert() is failure-isolated and never
+                // throws, but a catastrophic failure here must still never
+                // interrupt the reconciliation cycle.
+                paymentLogger.error("reconciliation_operational_alert_failed", {
+                    event: "reconciliation_operational_alert_failed",
+                    alertType: alert.type,
+                    cycleStart: cycleStartIso,
+                    error: emitError?.message || emitError,
+                });
+            }
+        }
     }
 
 }

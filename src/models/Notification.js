@@ -106,6 +106,23 @@ const notificationSchema = new mongoose.Schema(
         },
 
         /**
+         * Operational severity for admin/operational alerts.
+         *
+         * Customer-facing notifications default to `info`. Operational alerts
+         * emitted by the admin alerting foundation set this explicitly. The
+         * field is additive: every existing notification remains valid because
+         * the default is applied at write time, not enforced as required.
+         */
+        severity: {
+            type: String,
+            enum: {
+                values: ["info", "warn", "error", "critical"],
+                message: "Invalid notification severity",
+            },
+            default: "info",
+        },
+
+        /**
          * Idempotency key. UNIQUE index makes duplicate creation impossible
          * even under concurrency.
          */

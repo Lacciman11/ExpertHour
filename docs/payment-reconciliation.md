@@ -28,8 +28,87 @@ Implemented by `_findCandidates()`:
 - Payments with `reconciliationAttempts >= maxAttempts` are excluded from candidate selection.
 - `maxReached` counts exhausted pending payments and exhausted stale processing payments, deduplicated by reference.
 - Exhausted payments are not automatically marked failed merely because the limit was reached; they may remain pending or processing.
-- No implemented manual recovery or administrative recovery path was found in the inspected code. This is an operational limitation, not a guarantee that no external procedure exists.
 - The `"maximum retry"` error branch is counted as a terminal failure and contributes to both `failed` and `maxReached`.
+
+## Admin payment recovery
+
+A controlled administrative recovery path exists alongside the automatic worker.
+It is intentionally separate from refund reconciliation and never bypasses the
+Paystack verification or integrity checks.
+
+### Endpoint
+
+`POST /api/v1/admin/payments/:reference/reconcile`
+
+- Implemented by `admin.controller.js` → `manualReconcilePayment()`, which
+  delegates to `paymentService.manualReconcilePayment(reference, adminId, correlationId)`.
+- **Authentication and authorization:** the entire admin router is wrapped with
+  `authenticate()` then `authorize("ADMIN")`. Unauthenticated requests receive
+  401; non-admin authenticated users receive 403.
+- **Rate limiting:** `manualReconcileLimiter` (30 requests per 15 minutes per
+  client IP) is applied to the route.
+- **Validation:** `adminReferenceParamValidator` requires a non-empty string
+  reference of 5–128 characters.
+
+### Eligible payment statuses
+
+- `pending` with `createdAt` older than `delayMs` and `reconciliationAttempts < maxAttempts`.
+- `processing` with `processingStartedAt` older than `processingTimeoutMs` and
+  `reconciliationAttempts < maxAttempts` (stale processing).
+- **Not eligible:** `success`, `failed`, `abandoned` (terminal), active
+  processing (elapsed < `processingTimeoutMs`), and exhausted payments.
+
+### Exhausted-attempt behavior
+
+- Payments with `reconciliationAttempts >= maxAttempts` are rejected with HTTP
+  422 (`exhausted`). The retry counter is **not** reset, so manual recovery
+  cannot bypass the automatic candidate-selection exhaustion safeguard.
+- A `skipped` recovery audit record is written for the rejected attempt.
+
+### Stale-processing recovery
+
+- Active processing (elapsed < `processingTimeoutMs`) is rejected with HTTP 409
+  (`processing`) — it is being handled by another request.
+- Stale processing is recovered atomically: the payment is claimed and the
+  existing `reconcilePayment()` flow is reused with `skipClaim: true`.
+
+### Atomic claims and concurrency
+
+- The manual claim uses an exclusive predicate: `status: "pending"` **or**
+  `status: "processing" AND processingStartedAt < cutoff AND no other claim
+  token present`. On success it writes an opaque `recoveryClaimToken` and
+  `recoveryClaimedBy` (the initiating admin) onto the payment.
+- Two administrators cannot both claim the same payment. The losing claimant
+  receives a controlled `PaymentError` of type `processing`, mapped to HTTP 409.
+- A losing claimant can never modify the winner's state: every subsequent
+  mutation is guarded by the claim token, and the token is released on terminal
+  settlement or on any revert to `pending`.
+
+### Recovery audit records
+
+- A `PaymentRecoveryAudit` record is written for every branch: `not_found`,
+  `terminal`, `processing`, `skipped`, `success`, `failed`, and `error`.
+- Each record identifies the initiating admin (`initiatedBy`), the outcome,
+  the reason, and the `reconciliationAttempts` before and after.
+- **Audit-write failure:** if the audit record cannot be persisted after a
+  financial action has already occurred, the service fails loudly with HTTP
+  503 (`audit_write_failed`) rather than reporting a fully audited recovery.
+  The financial effect is not repeated on subsequent attempts.
+
+### Paystack verification and integrity safeguards
+
+- Manual recovery reuses `reconcilePayment()`, which performs Paystack
+  verification and enforces reference, amount, currency, and booking integrity.
+- Transient Paystack/network errors revert the payment to `pending` and are
+  classified as transient; integrity failures revert to `pending` and are
+  surfaced as integrity errors. Neither path corrupts committed state.
+
+### Separation from refund reconciliation
+
+- Manual recovery calls `reconcilePayment()` only. No refund code is reachable
+  from the admin recovery path. Refund reconciliation lives in
+  `refund-reconciliation.service.js` and `refund.service.js` with no route
+  overlap.
 
 ## Cycle metrics
 

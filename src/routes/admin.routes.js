@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { rateLimit } from "express-rate-limit";
 
 import {
     getDashboardStats,
@@ -28,6 +29,7 @@ import {
     adminUserIdParamValidator,
     adminProfileIdParamValidator,
     changeRoleBodyValidator,
+    adminReferenceParamValidator,
 } from "../validators/admin.validator.js";
 
 import validate from "../middlewares/validate.middleware.js";
@@ -35,6 +37,27 @@ import authenticate from "../middlewares/auth.middleware.js";
 import authorize from "../middlewares/role.middleware.js";
 
 const router = Router();
+
+/*
+ |--------------------------------------------------------------------------
+ | Rate limiters
+ |--------------------------------------------------------------------------
+ |
+ | Manual payment reconciliation touches Paystack verification, so it is
+ | rate-limited per admin user to prevent accidental or malicious retry
+ | storms. The window matches the payment verification limiter.
+ */
+const manualReconcileLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 30, // 30 requests per 15 minutes per admin
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => req.user ? req.user._id.toString() : req.ip,
+    message: {
+        success: false,
+        message: "Too many reconciliation requests. Please try again later.",
+    },
+});
 
 /*
 |--------------------------------------------------------------------------
@@ -65,7 +88,13 @@ router.get("/payments", getAllPayments);
 
 router.get("/payments/recovery-report", getPaymentRecoveryReport);
 
-router.post("/payments/:reference/reconcile", manualReconcilePayment);
+router.post(
+    "/payments/:reference/reconcile",
+    adminReferenceParamValidator,
+    validate,
+    manualReconcileLimiter,
+    manualReconcilePayment
+);
 
 /*
 |--------------------------------------------------------------------------

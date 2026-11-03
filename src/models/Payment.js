@@ -232,6 +232,34 @@ const paymentSchema = new mongoose.Schema(
             type: Date,
             default: null,
         },
+
+        /**
+         * recoveryClaimToken: opaque ownership token written when a manual
+         * admin recovery atomically claims this payment. The token is set
+         * together with `recoveryClaimedBy` and cleared on final settlement.
+         *
+         * The claim predicate in manualReconcilePayment() matches on this
+         * token, so two administrators cannot both claim the same payment:
+         * only the request that owns the token can mutate state afterwards.
+         * The token is intentionally NOT unique-indexed — a payment may be
+         * claimed at most once per recovery request, and the token is cleared
+         * when the payment leaves processing.
+         */
+        recoveryClaimToken: {
+            type: String,
+            default: null,
+            index: true,
+        },
+
+        /**
+         * recoveryClaimedBy: ObjectId of the admin whose recovery request
+         * currently owns the claim token. Cleared together with the token.
+         */
+        recoveryClaimedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            default: null,
+        },
     },
     {
         timestamps: true,

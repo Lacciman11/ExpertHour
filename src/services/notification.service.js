@@ -5,6 +5,7 @@ import User from "../models/User.js";
 import ApiError from "../utils/ApiError.js";
 import {
     NOTIFICATION_CATEGORY,
+    USER_ROLES,
     MANDATORY_EMAIL_CATEGORIES,
     MANDATORY_IN_APP_CATEGORIES,
 } from "../utils/constants.js";
@@ -95,6 +96,57 @@ const MAX_TYPE_LENGTH = 100;
 const MAX_TITLE_LENGTH = 200;
 const MAX_BODY_LENGTH = 2000;
 const MAX_DEDUPE_KEY_LENGTH = 300;
+
+/**
+ * Operational severities accepted on Notification.severity.
+ *
+ * Additive only: every existing notification remains valid because the field
+ * defaults to `info` at write time. Customer-facing notifications that do not
+ * specify severity are unaffected.
+ */
+const NOTIFICATION_SEVERITY = Object.freeze(["info", "warn", "error", "critical"]);
+
+const DEFAULT_SEVERITY = "info";
+
+/**
+ * Allowed `data` keys for operational admin alerts.
+ *
+ * Operational alerts carry a different payload shape from customer-facing
+ * notifications (asset references, failure categories, counts, timestamps,
+ * initiating admin). The existing ALLOWED_DATA_KEYS allowlist is deliberately
+ * NOT reused here because it would either reject legitimate operational
+ * fields (payment reference, asset type) or admit fields the customer UI does
+ * not understand. This allowlist is separate and equally strict.
+ *
+ * Never admitted: passwords, tokens, API keys, Paystack secrets, card/bank
+ * data, customer email/phone, raw provider responses, unrestricted error
+ * objects or stack traces.
+ */
+const OPERATIONAL_ALERT_DATA_KEYS = Object.freeze([
+    "reference",
+    "assetType",
+    "assetStatus",
+    "failureCategory",
+    "attemptCount",
+    "maxAttempts",
+    "timestamp",
+    "cycleStart",
+    "processed",
+    "succeeded",
+    "failed",
+    "reconciled",
+    "alreadyVerified",
+    "skippedProcessing",
+    "deferred",
+    "terminalFailures",
+    "transientErrors",
+    "unexpectedErrors",
+    "maxReached",
+    "initiatedBy",
+    "initiatorRole",
+    "correlationId",
+    "deepLinkPath",
+]);
 
 /**
  * MongoDB duplicate-key error code. Raised when a unique index rejects an
@@ -256,7 +308,7 @@ class NotificationService {
 
         }
 
-        const { recipientId, category, type, title, body, dedupeKey, data } = input;
+        const { recipientId, category, type, title, body, dedupeKey, data, severity } = input;
 
         // --- recipientId -----------------------------------------------------
         if (!recipientId || !mongoose.Types.ObjectId.isValid(recipientId)) {
@@ -324,6 +376,24 @@ class NotificationService {
 
         }
 
+        // --- severity --------------------------------------------------------
+        // Additive and optional. Customer-facing notifications that omit
+        // severity keep the safe default. An invalid value is normalised to
+        // the default rather than thrown, so a caller typo can never break a
+        // financial operation downstream of the emitter.
+        const normalisedSeverity = NOTIFICATION_SEVERITY.includes(severity)
+            ? severity
+            : DEFAULT_SEVERITY;
+
+        // --- data ------------------------------------------------------------
+        // Customer-facing notifications use the customer allowlist; operational
+        // admin alerts use the separate operational allowlist. The caller
+        // signals which by setting `operational: true`. Both sanitisers drop
+        // unknown keys, so a caller cannot smuggle sensitive values in.
+        const sanitisedData = input.operational
+            ? this._sanitizeOperationalData(data)
+            : this._sanitizeData(data);
+
         return {
             recipientId: new mongoose.Types.ObjectId(recipientId),
             category,
@@ -331,8 +401,90 @@ class NotificationService {
             title: title.trim(),
             body: body.trim(),
             dedupeKey: dedupeKey.trim(),
-            data: this._sanitizeData(data),
+            severity: normalisedSeverity,
+            data: sanitisedData,
         };
+
+    }
+
+    /**
+     * Strip an operational alert payload down to the operational allowlist.
+     *
+     * Unknown keys are dropped. Object-id-shaped values are normalised to
+     * ObjectId so references are stored consistently. Strings are trimmed and
+     * length-capped so a caller cannot inject an unbounded body into a
+     * notification payload. Numbers and booleans are passed through only for
+     * the explicitly allowlisted numeric/count fields.
+     *
+     * @param {object} rawData - caller-supplied operational payload
+     * @returns {object} sanitised operational payload (possibly empty)
+     * @private
+     */
+    _sanitizeOperationalData(rawData) {
+
+        if (!rawData || typeof rawData !== "object" || Array.isArray(rawData)) {
+
+            return {};
+
+        }
+
+        const sanitized = {};
+
+        for (const key of OPERATIONAL_ALERT_DATA_KEYS) {
+
+            if (!Object.prototype.hasOwnProperty.call(rawData, key)) {
+
+                continue;
+
+            }
+
+            const value = rawData[key];
+
+            if (value === undefined || value === null) {
+
+                continue;
+
+            }
+
+            // Identifiers that look like Mongo ObjectIds are normalised.
+            if (typeof value === "string" && mongoose.Types.ObjectId.isValid(value)) {
+
+                sanitized[key] = new mongoose.Types.ObjectId(value);
+
+                continue;
+
+            }
+
+            if (typeof value === "number" && !Number.isNaN(value)) {
+
+                sanitized[key] = value;
+
+                continue;
+
+            }
+
+            if (typeof value === "boolean") {
+
+                sanitized[key] = value;
+
+                continue;
+
+            }
+
+            if (typeof value === "string") {
+
+                sanitized[key] = value.trim().slice(0, 2000);
+
+                continue;
+
+            }
+
+            // Objects and arrays are dropped: operational alerts carry scalar
+            // references only, never nested provider payloads or error objects.
+
+        }
+
+        return sanitized;
 
     }
 
@@ -485,6 +637,23 @@ class NotificationService {
         );
 
         return { modifiedCount: result.modifiedCount || 0 };
+
+    }
+
+    /**
+     * Resolve every active user with the ADMIN role.
+     *
+     * Used by the operational alert emitter to fan an alert out to all
+     * administrators rather than assuming a single on-call admin. The query
+     * is read-only and projected to `_id` only.
+     *
+     * @returns {Promise<Array<{_id: ObjectId}>>} possibly empty
+     */
+    async listAdminUsers() {
+
+        return User.find({ role: USER_ROLES.ADMIN, isActive: true })
+            .select("_id")
+            .lean();
 
     }
 

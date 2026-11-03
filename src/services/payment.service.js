@@ -984,6 +984,7 @@ class PaymentService {
                 // Revert to pending on transient Paystack/network error.
                 payment.status = "pending";
                 payment.processingStartedAt = null;
+                this._releaseRecoveryClaim(payment);
                 await payment.save();
 
                 throw new PaymentError("Failed to verify payment with Paystack: " + error.message, "transient");
@@ -997,6 +998,7 @@ class PaymentService {
 
                 payment.status = "pending";
                 payment.processingStartedAt = null;
+                this._releaseRecoveryClaim(payment);
                 await payment.save();
 
                 throw new PaymentError("Invalid Paystack verification response: missing transaction data", "integrity");
@@ -1052,6 +1054,10 @@ class PaymentService {
 
                 payment.status = "failed";
                 payment.paystackResponse = paystackData;
+                // Release any manual-recovery claim token: the payment is now
+                // terminal and no administrator owns the processing claim.
+                payment.recoveryClaimToken = null;
+                payment.recoveryClaimedBy = null;
                 await payment.save();
 
                 booking.paymentStatus = "failed";
@@ -1106,6 +1112,7 @@ class PaymentService {
                 // Revert to pending on integrity failure so the payment can be retried later.
                 payment.status = "pending";
                 payment.processingStartedAt = null;
+                this._releaseRecoveryClaim(payment);
                 await payment.save();
 
                 throw integrityError;
@@ -1192,6 +1199,10 @@ class PaymentService {
                 payment.paystackResponse = paystackData;
                 payment.paidAt = paidAt;
                 payment.processingStartedAt = null;
+                // Release any manual-recovery claim token: the payment is now
+                // terminal and no administrator owns the processing claim.
+                payment.recoveryClaimToken = null;
+                payment.recoveryClaimedBy = null;
                 await payment.save({ session });
 
                 // Update Booking
@@ -1221,6 +1232,7 @@ class PaymentService {
                 // Revert payment to pending on DB failure.
                 payment.status = "pending";
                 payment.processingStartedAt = null;
+                this._releaseRecoveryClaim(payment);
                 await payment.save();
 
                 paymentLogger.error("payment_transaction_failed", {
@@ -1294,6 +1306,7 @@ class PaymentService {
 
                 payment.status = "pending";
                 payment.processingStartedAt = null;
+                this._releaseRecoveryClaim(payment);
                 await payment.save();
 
             }
@@ -1375,6 +1388,7 @@ class PaymentService {
         // 3. Check active processing (stale timeout policy).
         const now = new Date();
         const processingTimeoutMs = env.paymentReconciliation.processingTimeoutMs;
+        const maxAttempts = env.paymentReconciliation.maxAttempts;
         if (payment.status === "processing" && payment.processingStartedAt) {
             const elapsed = now.getTime() - new Date(payment.processingStartedAt).getTime();
             if (elapsed < processingTimeoutMs) {
@@ -1398,15 +1412,63 @@ class PaymentService {
             }
         }
 
+        // 3b. Reject exhausted payments (attempts >= maxAttempts). Manual
+        // recovery must NOT reset the retry counter to bypass the exhaustion
+        // safeguard that gates automatic candidate selection. Exhausted
+        // payments are rejected here, before the atomic claim, so the claim's
+        // counter reset can never revive an exhausted payment.
+        if (attemptsBefore >= maxAttempts) {
+            const exhaustedReason = `Recovery ineligible: reconciliation attempts exhausted (${attemptsBefore}/${maxAttempts})`;
+            try {
+                await PaymentRecoveryAudit.create({
+                    paymentReference: reference,
+                    paymentId: payment._id,
+                    initiatedBy: adminId,
+                    outcome: "skipped",
+                    reason: exhaustedReason,
+                    reconciliationAttemptsBefore: attemptsBefore,
+                    reconciliationAttemptsAfter: attemptsBefore,
+                });
+            } catch (auditError) {
+                paymentLogger.error("payment_recovery_audit_write_failed", {
+                    event: "payment_recovery_audit_write_failed",
+                    error: auditError.message,
+                });
+                throw new PaymentError(
+                    "Recovery blocked: recovery audit record could not be persisted",
+                    "audit_write_failed"
+                );
+            }
+            throw new PaymentError(exhaustedReason, "exhausted");
+        }
+
         // 4. Atomically claim with reset.
+        // The claim predicate is exclusive: it matches only payments that are
+        // eligible AND do not already carry another request's claim token.
+        // Two administrators therefore cannot both claim the same payment —
+        // only the winner's token is written, and only the winner may mutate
+        // state afterwards.
+        const claimToken = crypto.randomBytes(16).toString("hex");
+        const claimCutoff = new Date(now.getTime() - processingTimeoutMs);
         const claimed = await Payment.findOneAndUpdate(
-            { reference, status: { $in: ["pending", "processing"] } },
+            {
+                reference,
+                $or: [
+                    { status: "pending" },
+                    { status: "processing", processingStartedAt: { $lt: claimCutoff } },
+                ],
+                $and: [
+                    { recoveryClaimToken: { $ne: claimToken } },
+                ],
+            },
             {
                 $set: {
                     status: "processing",
                     processingStartedAt: new Date(),
                     reconciliationAttempts: 0,
                     lastReconciliationAttemptAt: new Date(),
+                    recoveryClaimToken: claimToken,
+                    recoveryClaimedBy: adminId,
                 },
             },
             { new: true }
@@ -1437,6 +1499,9 @@ class PaymentService {
         let result;
         let outcome = "error";
         let reason = null;
+        // Tracks whether the recovery-audit record persisted. A recovery must
+        // not be reported as fully audited when audit persistence failed.
+        let auditPersisted = true;
         try {
             result = await this.reconcilePayment(reference, correlationId, { skipClaim: true });
             outcome = result.success ? "success" : (result.status === "pending" ? "skipped" : "failed");
@@ -1444,11 +1509,20 @@ class PaymentService {
         } catch (error) {
             outcome = "error";
             reason = error.message;
-            // Revert to pending on failure
-            if (claimed.status === "processing") {
-                claimed.status = "pending";
-                claimed.processingStartedAt = null;
-                await claimed.save();
+            // Revert to pending on failure ONLY when this request still owns
+            // the claim. A losing claimant must never modify the winner's
+            // state, and the token guard makes that structurally impossible.
+            const ownership = await Payment.findOne({
+                reference,
+                recoveryClaimToken: claimToken,
+                recoveryClaimedBy: adminId,
+            });
+            if (ownership && ownership.status === "processing") {
+                ownership.status = "pending";
+                ownership.processingStartedAt = null;
+                ownership.recoveryClaimToken = null;
+                ownership.recoveryClaimedBy = null;
+                await ownership.save();
             }
             throw error;
         } finally {
@@ -1469,7 +1543,18 @@ class PaymentService {
                     event: "payment_recovery_audit_write_failed",
                     error: auditError.message,
                 });
+                auditPersisted = false;
             }
+        }
+
+        // 7. Guard against reporting a recovery as fully audited when the
+        // audit record could not be persisted. The financial effect already
+        // occurred, so we fail loudly instead of silently returning success.
+        if (!auditPersisted) {
+            throw new PaymentError(
+                "Recovery completed but the recovery audit record could not be persisted",
+                "audit_write_failed"
+            );
         }
 
         return result;
@@ -1776,6 +1861,31 @@ class PaymentService {
         const terminalStatuses = ["failed", "abandoned"];
 
         return terminalStatuses.includes(status);
+
+    }
+
+    /**
+     * Release any manual-recovery claim token held by this payment document.
+     *
+     * Called whenever a payment leaves the processing state without settling
+     * (transient Paystack error, malformed response, non-terminal status, or
+     * a DB failure during settlement). Releasing the token ensures a future
+     * admin recovery can claim the payment again and that a stale token from
+     * a failed request cannot block a legitimate one.
+     *
+     * The caller is responsible for persisting the document afterwards.
+     */
+    _releaseRecoveryClaim(payment) {
+
+        if (!payment) return;
+
+        if (payment.recoveryClaimToken != null) {
+            payment.recoveryClaimToken = null;
+        }
+
+        if (payment.recoveryClaimedBy != null) {
+            payment.recoveryClaimedBy = null;
+        }
 
     }
 
@@ -2461,3 +2571,4 @@ class PaymentService {
 export { paystackClient };
 
 export default new PaymentService();
+

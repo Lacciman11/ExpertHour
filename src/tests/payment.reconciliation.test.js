@@ -825,6 +825,383 @@ describe("Payment Reconciliation", () => {
 
     });
 
-});
+    describe("Reconciliation cycle metrics", () => {
 
-            
+        it("emits the expected metrics for a mixed reconciliation cycle", async () => {
+
+            const user = await createTestUser();
+            const consultant = await createTestUser({ email: "consultant-metrics@example.com", role: "CONSULTANT" });
+
+            // Seed seven distinct, eligible pending payments. `createdAt` is
+            // well past delayMs (5s) and `reconciliationAttempts` stays below
+            // the configured maximum (3), so every record is a candidate.
+            const oldDate = new Date(Date.now() - 600000);
+
+            const outcomes = [
+                { success: true, alreadyVerified: false },
+                { success: true, alreadyVerified: true },
+                { success: false, status: "processing" },
+                { success: false, status: "pending" },
+                { success: false },
+            ];
+
+            const transientError = new Error("Paystack verification timeout");
+            transientError.type = "transient";
+
+            const unexpectedError = new Error("Unexpected reconciliation error");
+
+            const queue = [...outcomes, transientError, unexpectedError];
+
+            const references = [];
+            for (let i = 0; i < 7; i++) {
+                const booking = await createTestBooking(user._id, consultant._id, { amount: 500000 });
+                const payment = await createTestPayment(booking._id, user._id, consultant._id, {
+                    status: "pending",
+                    createdAt: oldDate,
+                    reconciliationAttempts: 0,
+                });
+                references.push(payment.reference);
+            }
+
+            const reconcileSpy = jest.spyOn(paymentService, "reconcilePayment")
+                .mockImplementation(async (reference) => {
+                    const outcome = queue.shift();
+                    if (outcome instanceof Error) {
+                        throw outcome;
+                    }
+                    return outcome;
+                });
+
+            const reconciliationService = (await import("../services/payment-reconciliation.service.js")).default;
+            const paymentLogger = (await import("../utils/logger.js")).default;
+
+            const infoSpy = jest.spyOn(paymentLogger, "info");
+
+            let completedCall;
+            let reconcileCalls;
+            try {
+                await reconciliationService._runCycle();
+                reconcileCalls = reconcileSpy.mock.calls;
+                completedCall = infoSpy.mock.calls.find(
+                    ([event]) => event === "reconciliation_cycle_completed"
+                );
+            } finally {
+                reconcileSpy.mockRestore();
+                infoSpy.mockRestore();
+            }
+
+            expect(completedCall).toBeDefined();
+            const metrics = completedCall[1];
+
+            expect(metrics.processed).toBe(7);
+            expect(metrics.reconciled).toBe(1);
+            expect(metrics.alreadyVerified).toBe(1);
+            expect(metrics.succeeded).toBe(2);
+            expect(metrics.skippedProcessing).toBe(1);
+            expect(metrics.deferred).toBe(1);
+            expect(metrics.terminalFailures).toBe(1);
+            expect(metrics.transientErrors).toBe(1);
+            expect(metrics.unexpectedErrors).toBe(1);
+            expect(metrics.failed).toBe(1);
+            expect(metrics.maxReached).toBe(0);
+
+            // Every seeded reference was reconciled exactly once. The cycle sorts
+            // candidates by createdAt; with identical createdAt values the
+            // service order is not guaranteed to match seed order, so compare
+            // sorted sets rather than exact order.
+            expect(reconcileCalls).toHaveLength(7);
+            expect(reconcileCalls.map(([ref]) => ref).sort()).toEqual([...references].sort());
+        });
+
+    });
+
+    describe("Reconciliation operational alerts", () => {
+
+        const oldDate = new Date(Date.now() - 600000);
+
+        const seedPayments = async (count) => {
+            const user = await createTestUser();
+            const consultant = await createTestUser({ email: `consultant-alerts-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`, role: "CONSULTANT" });
+            const references = [];
+            for (let i = 0; i < count; i++) {
+                const booking = await createTestBooking(user._id, consultant._id, { amount: 500000 });
+                const payment = await createTestPayment(booking._id, user._id, consultant._id, {
+                    status: "pending",
+                    createdAt: oldDate,
+                    reconciliationAttempts: 0,
+                });
+                references.push(payment.reference);
+            }
+            return { user, consultant, references };
+        };
+
+        const queueMock = (outcomes) => {
+            const queue = [...outcomes];
+            return jest.fn().mockImplementation(async () => {
+                const outcome = queue.shift();
+                if (outcome instanceof Error) throw outcome;
+                return outcome;
+            });
+        };
+
+        const transientError = (message = "Paystack verification timeout") => {
+            const err = new Error(message);
+            err.type = "transient";
+            return err;
+        };
+
+        it("emits one warn alert when the cycle has transient errors", async () => {
+            const { references } = await seedPayments(2);
+            const reconcileSpy = jest.spyOn(paymentService, "reconcilePayment")
+                .mockImplementation(queueMock([{ success: false, status: "processing" }, transientError()]));
+
+            const emitSpy = jest.spyOn((await import("../services/domain-notification.emitter.js")).default, "emitAdminAlert");
+            const reconciliationService = (await import("../services/payment-reconciliation.service.js")).default;
+
+            try {
+                await reconciliationService._runCycle();
+            } finally {
+                reconcileSpy.mockRestore();
+            }
+
+            const transientCalls = emitSpy.mock.calls.filter(([p]) => p.type === "operational.payment_reconciliation.transient_errors");
+            expect(transientCalls).toHaveLength(1);
+            expect(transientCalls[0][0].severity).toBe("warn");
+            expect(transientCalls[0][0].data.transientErrors).toBe(1);
+            expect(transientCalls[0][0].data.processed).toBe(2);
+            expect(transientCalls[0][0].data.cycleStart).toBeTruthy();
+
+            emitSpy.mockRestore();
+        });
+
+        it("emits one error alert when the cycle has unexpected errors", async () => {
+            await seedPayments(2);
+            const reconcileSpy = jest.spyOn(paymentService, "reconcilePayment")
+                .mockImplementation(queueMock([{ success: false, status: "processing" }, new Error("Unexpected reconciliation error")]));
+
+            const emitSpy = jest.spyOn((await import("../services/domain-notification.emitter.js")).default, "emitAdminAlert");
+            const reconciliationService = (await import("../services/payment-reconciliation.service.js")).default;
+
+            try {
+                await reconciliationService._runCycle();
+            } finally {
+                reconcileSpy.mockRestore();
+            }
+
+            const unexpectedCalls = emitSpy.mock.calls.filter(([p]) => p.type === "operational.payment_reconciliation.unexpected_errors");
+            expect(unexpectedCalls).toHaveLength(1);
+            expect(unexpectedCalls[0][0].severity).toBe("error");
+            expect(unexpectedCalls[0][0].data.unexpectedErrors).toBe(1);
+
+            emitSpy.mockRestore();
+        });
+
+        it("emits one error alert when the cycle has terminal failures", async () => {
+            await seedPayments(2);
+            const reconcileSpy = jest.spyOn(paymentService, "reconcilePayment")
+                .mockImplementation(queueMock([{ success: false, status: "processing" }, { success: false }]));
+
+            const emitSpy = jest.spyOn((await import("../services/domain-notification.emitter.js")).default, "emitAdminAlert");
+            const reconciliationService = (await import("../services/payment-reconciliation.service.js")).default;
+
+            try {
+                await reconciliationService._runCycle();
+            } finally {
+                reconcileSpy.mockRestore();
+            }
+
+            const terminalCalls = emitSpy.mock.calls.filter(([p]) => p.type === "operational.payment_reconciliation.terminal_failures");
+            expect(terminalCalls).toHaveLength(1);
+            expect(terminalCalls[0][0].severity).toBe("error");
+            expect(terminalCalls[0][0].data.terminalFailures).toBe(1);
+
+            emitSpy.mockRestore();
+        });
+
+        it("emits one critical alert when the cycle has exhausted attempts", async () => {
+            const Payment = (await import("../models/Payment.js")).default;
+            const user = await createTestUser();
+            const consultant = await createTestUser({ email: `consultant-exhausted-${Date.now()}@example.com`, role: "CONSULTANT" });
+            const booking = await createTestBooking(user._id, consultant._id, { amount: 500000 });
+            const payment = await createTestPayment(booking._id, user._id, consultant._id, {
+                status: "pending",
+                createdAt: oldDate,
+                reconciliationAttempts: 3,
+            });
+            // The exhausted payment is NOT a candidate (attempts >= maxAttempts),
+            // so the cycle processes 0 candidates but maxReached is 1.
+            const reconcileSpy = jest.spyOn(paymentService, "reconcilePayment");
+
+            const emitSpy = jest.spyOn((await import("../services/domain-notification.emitter.js")).default, "emitAdminAlert");
+            const reconciliationService = (await import("../services/payment-reconciliation.service.js")).default;
+
+            try {
+                await reconciliationService._runCycle();
+            } finally {
+                reconcileSpy.mockRestore();
+            }
+
+            const exhaustedCalls = emitSpy.mock.calls.filter(([p]) => p.type === "operational.payment_reconciliation.exhausted_attempts");
+            expect(exhaustedCalls).toHaveLength(1);
+            expect(exhaustedCalls[0][0].severity).toBe("critical");
+            expect(exhaustedCalls[0][0].data.maxReached).toBe(1);
+
+            emitSpy.mockRestore();
+        });
+
+        it("does not emit an alert when the corresponding metric is zero", async () => {
+            await seedPayments(2);
+            const reconcileSpy = jest.spyOn(paymentService, "reconcilePayment")
+                .mockImplementation(queueMock([
+                    { success: true, alreadyVerified: false },
+                    { success: true, alreadyVerified: false },
+                ]));
+
+            const emitSpy = jest.spyOn((await import("../services/domain-notification.emitter.js")).default, "emitAdminAlert");
+            const reconciliationService = (await import("../services/payment-reconciliation.service.js")).default;
+
+            try {
+                await reconciliationService._runCycle();
+            } finally {
+                reconcileSpy.mockRestore();
+            }
+
+            expect(emitSpy.mock.calls).toHaveLength(0);
+
+            emitSpy.mockRestore();
+        });
+
+        it("emits multiple alert categories independently in one cycle", async () => {
+            await seedPayments(4);
+            const reconcileSpy = jest.spyOn(paymentService, "reconcilePayment")
+                .mockImplementation(queueMock([
+                    transientError(),
+                    new Error("Unexpected reconciliation error"),
+                    { success: false },
+                    { success: false, status: "processing" },
+                ]));
+
+            const emitSpy = jest.spyOn((await import("../services/domain-notification.emitter.js")).default, "emitAdminAlert");
+            const reconciliationService = (await import("../services/payment-reconciliation.service.js")).default;
+
+            try {
+                await reconciliationService._runCycle();
+            } finally {
+                reconcileSpy.mockRestore();
+            }
+
+            const types = emitSpy.mock.calls.map(([p]) => p.type).sort();
+            expect(types).toEqual([
+                "operational.payment_reconciliation.transient_errors",
+                "operational.payment_reconciliation.unexpected_errors",
+                "operational.payment_reconciliation.terminal_failures",
+            ]);
+
+            emitSpy.mockRestore();
+        });
+
+        it("deduplicates repeated alert emission within the same cycle", async () => {
+            await seedPayments(2);
+            const reconcileSpy = jest.spyOn(paymentService, "reconcilePayment")
+                .mockImplementation(queueMock([{ success: false, status: "processing" }, transientError()]));
+
+            const emitSpy = jest.spyOn((await import("../services/domain-notification.emitter.js")).default, "emitAdminAlert");
+            const reconciliationService = (await import("../services/payment-reconciliation.service.js")).default;
+
+            try {
+                await reconciliationService._runCycle();
+                await reconciliationService._runCycle();
+            } finally {
+                reconcileSpy.mockRestore();
+            }
+
+            const transientCalls = emitSpy.mock.calls.filter(([p]) => p.type === "operational.payment_reconciliation.transient_errors");
+            expect(transientCalls).toHaveLength(2);
+            expect(transientCalls[0][0].dedupeKey).toBe(transientCalls[1][0].dedupeKey);
+
+            emitSpy.mockRestore();
+        });
+
+        it("produces distinct alerts for different cycles", async () => {
+            await seedPayments(2);
+            const reconcileSpy = jest.spyOn(paymentService, "reconcilePayment")
+                .mockImplementation(queueMock([{ success: false, status: "processing" }, transientError()]));
+
+            const emitSpy = jest.spyOn((await import("../services/domain-notification.emitter.js")).default, "emitAdminAlert");
+            const reconciliationService = (await import("../services/payment-reconciliation.service.js")).default;
+
+            try {
+                await reconciliationService._runCycle();
+                await clearTestDB();
+                await seedPayments(2);
+                await reconciliationService._runCycle();
+            } finally {
+                reconcileSpy.mockRestore();
+            }
+
+            const transientCalls = emitSpy.mock.calls.filter(([p]) => p.type === "operational.payment_reconciliation.transient_errors");
+            expect(transientCalls).toHaveLength(2);
+            expect(transientCalls[0][0].dedupeKey).not.toBe(transientCalls[1][0].dedupeKey);
+
+            emitSpy.mockRestore();
+        });
+
+        it("does not fail reconciliation when alert delivery fails", async () => {
+            await seedPayments(2);
+            const reconcileSpy = jest.spyOn(paymentService, "reconcilePayment")
+                .mockImplementation(queueMock([{ success: false, status: "processing" }, transientError()]));
+
+            const emitSpy = jest.spyOn((await import("../services/domain-notification.emitter.js")).default, "emitAdminAlert")
+                .mockRejectedValue(new Error("notification store unavailable"));
+            const reconciliationService = (await import("../services/payment-reconciliation.service.js")).default;
+
+            let result;
+            try {
+                result = await reconciliationService._runCycle();
+            } finally {
+                reconcileSpy.mockRestore();
+                emitSpy.mockRestore();
+            }
+
+            expect(result).toBeUndefined();
+            expect(reconcileSpy.mock.calls).toHaveLength(2);
+
+            const Payment = (await import("../models/Payment.js")).default;
+            const processedPayments = await Payment.find({ status: "processing" });
+            expect(processedPayments).toHaveLength(1);
+        });
+
+        it("preserves existing reconciliation metrics unchanged", async () => {
+            await seedPayments(2);
+            const reconcileSpy = jest.spyOn(paymentService, "reconcilePayment")
+                .mockImplementation(queueMock([{ success: false, status: "processing" }, transientError()]));
+
+            const emitSpy = jest.spyOn((await import("../services/domain-notification.emitter.js")).default, "emitAdminAlert");
+            const reconciliationService = (await import("../services/payment-reconciliation.service.js")).default;
+            const paymentLogger = (await import("../utils/logger.js")).default;
+            const infoSpy = jest.spyOn(paymentLogger, "info");
+
+            try {
+                await reconciliationService._runCycle();
+            } finally {
+                reconcileSpy.mockRestore();
+            }
+
+            const completedCall = infoSpy.mock.calls.find(([event]) => event === "reconciliation_cycle_completed");
+            expect(completedCall).toBeDefined();
+            const metrics = completedCall[1];
+            expect(metrics.processed).toBe(2);
+            expect(metrics.succeeded).toBe(0);
+            expect(metrics.skippedProcessing).toBe(1);
+            expect(metrics.transientErrors).toBe(1);
+            expect(metrics.terminalFailures).toBe(0);
+            expect(metrics.unexpectedErrors).toBe(0);
+            expect(metrics.maxReached).toBe(0);
+
+            emitSpy.mockRestore();
+            infoSpy.mockRestore();
+        });
+
+    });
+
+});

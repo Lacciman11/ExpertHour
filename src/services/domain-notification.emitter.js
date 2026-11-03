@@ -1,12 +1,13 @@
 import notificationService from "./notification.service.js";
 import notificationRealtime from "../realtime/notification.socket.js";
 import paymentLogger from "../utils/logger.js";
+import { NOTIFICATION_CATEGORY } from "../utils/constants.js";
 
 /**
- * DomainNotificationEmitter — Phase 3B.1
+ * DomainNotificationEmitter — Phase 3B.1 / Stage 9.6C.1
  *
  * Shared, failure-isolated helper for emitting in-app notifications from
- * domain events (booking, consultation, review).
+ * domain events (booking, consultation, review) and operational admin alerts.
  *
  * Design rules:
  *   1. Notification persistence NEVER affects the authoritative business
@@ -20,7 +21,13 @@ import paymentLogger from "../utils/logger.js";
  *      personal data, tokens, or payment details.
  *
  * Scope: in-app only. This helper does not send email, enqueue outbox jobs, or
- * create in-app records for admins.
+ * create in-app records for admins. Operational alerts are persisted as
+ * `admin`-category notifications addressed to each active administrator.
+ *
+ * Known limitation: operational alerts are in-app records only. If MongoDB is
+ * unavailable, `notificationService.create()` cannot persist them and the
+ * emitter returns `{ ok: false }`; the calling financial operation is never
+ * affected. Email fallback for operational alerts is a later phase.
  */
 
 /**
@@ -49,6 +56,8 @@ async function emitOne({
     body,
     dedupeKey,
     data,
+    severity,
+    operational = false,
 }) {
     try {
         const result = await notificationService.create({
@@ -59,6 +68,8 @@ async function emitOne({
             body,
             dedupeKey,
             data,
+            severity,
+            operational,
         });
 
         // Real-time announcement. Emitted ONLY after persistence succeeded and
@@ -161,7 +172,153 @@ async function emitToRecipients({ category, type, subjectId, recipients }) {
     return { attempted, succeeded, created };
 }
 
+/**
+ * Emit one operational alert to a single administrator.
+ *
+ * Wraps `emitOne()` with the admin-specific category and the operational
+ * payload flag so the notification service uses the operational data
+ * allowlist. Failures are swallowed and logged; this function never throws.
+ *
+ * @param {object} params
+ * @param {string} params.recipientId - Admin user id to notify
+ * @param {string} params.type - stable event identifier, e.g.
+ *   "operational.payment_reconciliation.transient_errors"
+ * @param {string} params.title - headline
+ * @param {string} params.body - message body
+ * @param {string} params.severity - one of info/warn/error/critical
+ * @param {string} params.dedupeKey - idempotency key, unique per recipient
+ * @param {object} [params.data] - operational payload (allowlisted)
+ * @returns {Promise<{ok: boolean, created: boolean}>}
+ * @private
+ */
+async function emitAdminAlertOne({
+    recipientId,
+    type,
+    title,
+    body,
+    severity,
+    dedupeKey,
+    data,
+}) {
+    return emitOne({
+        recipientId,
+        category: NOTIFICATION_CATEGORY.ADMIN,
+        type,
+        title,
+        body,
+        dedupeKey,
+        data,
+        severity,
+        operational: true,
+    });
+}
+
+/**
+ * Emit an operational alert to every active administrator.
+ *
+ * Recipient resolution is delegated to `notificationService.listAdminUsers()`.
+ * Each administrator receives an independently deduplicated notification, so
+ * a repeated alert with the same dedupe key never creates duplicates for a
+ * given administrator.
+ *
+ * Failure isolation:
+ *   - If no administrator exists, a structured warning is logged and the
+ *     function returns `{ attempted: 0, succeeded: 0, created: 0 }` without
+ *     throwing.
+ *   - If recipient resolution fails, the error is logged and the function
+ *     returns the same zeroed result. The calling financial operation is never
+ *     affected.
+ *   - If notification creation fails for one administrator, that failure is
+ *     logged and isolated; other administrators are still attempted.
+ *
+ * @param {object} params
+ * @param {string} params.type - stable event identifier
+ * @param {string} params.title - headline
+ * @param {string} params.body - message body
+ * @param {string} params.severity - one of info/warn/error/critical
+ * @param {string} params.dedupeKey - idempotency key, unique per recipient
+ * @param {object} [params.data] - operational payload (allowlisted)
+ * @returns {Promise<{attempted: number, succeeded: number, created: number}>}
+ */
+async function emitAdminAlert({
+    type,
+    title,
+    body,
+    severity,
+    dedupeKey,
+    data,
+}) {
+    let attempted = 0;
+    let succeeded = 0;
+    let created = 0;
+
+    let admins;
+    try {
+        admins = await notificationService.listAdminUsers();
+    } catch (resolutionError) {
+        // Recipient resolution failed. Log and return zeroed: the calling
+        // financial operation must never be affected by alerting.
+        paymentLogger.error("admin_alert_recipient_resolution_failed", {
+            event: "admin_alert_recipient_resolution_failed",
+            alertType: type,
+            error: resolutionError?.message || resolutionError,
+        });
+        return { attempted, succeeded, created };
+    }
+
+    if (!admins || admins.length === 0) {
+        paymentLogger.warn("admin_alert_no_administrators", {
+            event: "admin_alert_no_administrators",
+            alertType: type,
+        });
+        return { attempted, succeeded, created };
+    }
+
+    for (const admin of admins) {
+        const recipientId = admin && admin._id ? String(admin._id) : null;
+        if (!recipientId) {
+            paymentLogger.warn("admin_alert_recipient_skipped", {
+                event: "admin_alert_recipient_skipped",
+                alertType: type,
+                reason: "missing_recipient_id",
+            });
+            continue;
+        }
+
+        attempted += 1;
+
+        // Each administrator must receive an independently deduplicated
+        // notification. The caller-supplied `dedupeKey` identifies the logical
+        // alert; we scope it per recipient so a repeated alert never creates
+        // duplicates for a given administrator while still allowing every
+        // administrator to receive it. The unique index on dedupeKey handles
+        // the rest, including concurrency.
+        const recipientDedupeKey = `${dedupeKey}:${recipientId}`;
+
+        const result = await emitAdminAlertOne({
+            recipientId,
+            type,
+            title,
+            body,
+            severity,
+            dedupeKey: recipientDedupeKey,
+            data,
+        });
+
+        if (result.ok) {
+            succeeded += 1;
+        }
+        if (result.created) {
+            created += 1;
+        }
+    }
+
+    return { attempted, succeeded, created };
+}
+
 export default {
     emitOne,
     emitToRecipients,
+    emitAdminAlert,
+    emitAdminAlertOne,
 };

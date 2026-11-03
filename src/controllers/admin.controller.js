@@ -354,17 +354,52 @@ export const getPaymentRecoveryReport = asyncHandler(async (req, res) => {
 });
 
 export const manualReconcilePayment = asyncHandler(async (req, res) => {
- 
+
     const { reference } = req.params;
- 
-    const result = await paymentService.manualReconcilePayment(reference, req.user._id, req.correlationId);
- 
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            result,
-            "Payment reconciliation initiated"
-        )
-    );
- 
+
+    // Validate the payment identifier before touching the service layer.
+    // References are application-generated (EXP-{timestamp}-{random}); an
+    // empty or malformed value is rejected immediately rather than looked up.
+    if (!reference || typeof reference !== "string" || reference.trim().length === 0) {
+        return res.status(400).json({
+            success: false,
+            message: "Payment reference is required",
+        });
+    }
+
+    const trimmedReference = reference.trim();
+
+    try {
+        const result = await paymentService.manualReconcilePayment(
+            trimmedReference,
+            req.user._id,
+            req.correlationId
+        );
+
+        return res.status(200).json(
+            new ApiResponse(
+                200,
+                result,
+                "Payment reconciliation initiated"
+            )
+        );
+    } catch (error) {
+        // Map the service-layer PaymentError classifications to consistent
+        // HTTP responses. Unauthorized/forbidden are handled by middleware;
+        // this controller maps service-level eligibility errors.
+        const statusByType = {
+            not_found: 404,
+            terminal: 409,
+            processing: 409,
+            exhausted: 422,
+            audit_write_failed: 503,
+        };
+        const statusCode = statusByType[error.type] || 500;
+        return res.status(statusCode).json({
+            success: false,
+            message: error.message,
+            errorType: error.type || "unknown",
+        });
+    }
+
 });
