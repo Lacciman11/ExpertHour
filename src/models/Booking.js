@@ -146,6 +146,10 @@ const bookingSchema = new mongoose.Schema(
     }
 );
 
+// Indexes for admin dashboard queries
+bookingSchema.index({ status: 1 });
+bookingSchema.index({ createdAt: -1 });
+
 const Booking = mongoose.model("Booking", bookingSchema);
 
 export default Booking;

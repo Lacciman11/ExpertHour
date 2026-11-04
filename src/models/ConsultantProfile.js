@@ -266,6 +266,9 @@ const consultantProfileSchema = new mongoose.Schema(
     }
 );
 
+// Indexes for admin dashboard queries
+consultantProfileSchema.index({ approvalStatus: 1 });
+
 const ConsultantProfile = mongoose.model(
     "ConsultantProfile",
     consultantProfileSchema

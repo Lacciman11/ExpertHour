@@ -349,9 +349,10 @@ class AdminService {
     async getPendingConsultants() {
 
         const profiles = await ConsultantProfile.find({ approvalStatus: "pending" })
-            .populate("userId", "firstName lastName email avatar")
+            .populate("userId", "firstName lastName avatar")
             .populate("categories", "name")
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .lean();
 
         return profiles;
 
@@ -408,7 +409,8 @@ class AdminService {
                 .populate("consultantProfileId", "hourlyRate skills")
                 .sort({ createdAt: -1 })
                 .skip(skip)
-                .limit(limit),
+                .limit(limit)
+                .lean(),
 
             Booking.countDocuments(query),
 
