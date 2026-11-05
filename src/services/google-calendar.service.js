@@ -3,7 +3,7 @@ import User from "../models/User.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
 import Booking from "../models/Booking.js";
 import env from "../config/env.js";
-import { APP_TIMEZONE } from "../utils/constants.js";
+import { APP_TIMEZONE, APP_TIMEZONE_UTC_OFFSET } from "../utils/constants.js";
 import tokenService from "./token.service.js";
 
 class GoogleCalendarService {
@@ -66,8 +66,11 @@ class GoogleCalendarService {
     }
 
     async refreshAccessToken(refreshToken) {
-        const clientId = process.env.GOOGLE_CLIENT_ID;
-        const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+        const { clientId, clientSecret } = env.googleCalendar;
+
+        if (!clientId || !clientSecret) {
+            throw new Error("Google Calendar API credentials are not configured. Please set GOOGLE_CALENDAR_CLIENT_ID and GOOGLE_CALENDAR_CLIENT_SECRET environment variables.");
+        }
 
         const response = await axios.post(
             "https://oauth2.googleapis.com/token",
@@ -82,9 +85,11 @@ class GoogleCalendarService {
             }
         );
 
+        // Preserve existing stored refresh token when Google omits a replacement.
         return {
             accessToken: response.data.access_token,
             expiresIn: response.data.expires_in,
+            ...(response.data.refresh_token ? { refreshToken: response.data.refresh_token } : {}),
         };
     }
 
@@ -105,9 +110,12 @@ class GoogleCalendarService {
 
             accessToken = refreshed.accessToken;
 
-            // Update stored token with new expiry
+            // Update stored token with new expiry. Do not overwrite refresh token when absent.
             profile.googleCalendar.accessToken = accessToken;
-            profile.googleCalendar.expiresAt = Date.now() + (refreshed.expiresIn || 3600) * 1000;
+            profile.googleCalendar.expiresAt = new Date(Date.now() + (refreshed.expiresIn || 3600) * 1000);
+            if (refreshed.refreshToken) {
+                profile.googleCalendar.refreshToken = refreshed.refreshToken;
+            }
             await profile.save();
         }
 
@@ -387,18 +395,24 @@ class GoogleCalendarService {
     }
 
     _formatGoogleCalendarDateTime(dateStr, timeStr, timezone = APP_TIMEZONE) {
-        const [hours, minutes] = timeStr.split(":").map(Number);
-        const date = new Date(dateStr + "T00:00:00Z");
-        date.setUTCHours(hours, minutes, 0, 0);
-        return date.toISOString();
+        // Booking date/time are stored as wall-clock values in the application's
+        // canonical timezone (Africa/Lagos, UTC+01:00, no DST), matching
+        // consultation-session scheduledStart parsing. Build an RFC3339 datetime
+        // with the explicit offset so the instant is correct regardless of server TZ.
+        void timezone; // canonical interpretation uses APP_TIMEZONE/offset
+        return `${dateStr}T${timeStr}:00${APP_TIMEZONE_UTC_OFFSET}`;
     }
 
     _calculateEndTime(dateStr, timeStr, duration, timezone = APP_TIMEZONE) {
-        const [hours, minutes] = timeStr.split(":").map(Number);
-        const date = new Date(dateStr + "T00:00:00Z");
-        date.setUTCHours(hours, minutes, 0, 0);
-        date.setUTCMinutes(date.getUTCMinutes() + duration);
-        return date.toISOString();
+        void timezone;
+        const start = new Date(`${dateStr}T${timeStr}:00${APP_TIMEZONE_UTC_OFFSET}`);
+        start.setUTCMinutes(start.getUTCMinutes() + Number(duration || 0));
+        // Return RFC3339 with the canonical offset by formatting in Lagos terms via offset math.
+        // Africa/Lagos is fixed UTC+01:00 (no DST).
+        const lagosMs = start.getTime() + 60 * 60 * 1000;
+        const d = new Date(lagosMs);
+        const pad = (n) => String(n).padStart(2, "0");
+        return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:00${APP_TIMEZONE_UTC_OFFSET}`;
     }
 }
 
