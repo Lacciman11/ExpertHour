@@ -23,6 +23,33 @@ router.use(authenticate());
 
 /*
 |--------------------------------------------------------------------------
+| Admin Routes
+|--------------------------------------------------------------------------
+|
+| Mounted at "/admin" before the consultant "/:id" catch-all so paths like
+| "/admin/all" are not captured as consultant id="admin". Scoping to "/admin"
+| ensures the ADMIN role check applies only to admin paths (preserves
+| consultant endpoint access and existing external paths).
+*/
+
+const adminRouter = Router();
+
+adminRouter.use(authorize("ADMIN"));
+
+adminRouter.get(
+    "/all",
+    getAllPayouts
+);
+
+adminRouter.get(
+    "/:id",
+    getPayoutById
+);
+
+router.use("/admin", adminRouter);
+
+/*
+|--------------------------------------------------------------------------
 | Consultant Routes
 |--------------------------------------------------------------------------
 */
@@ -44,27 +71,5 @@ router.get(
     authorize("CONSULTANT"),
     getMyPayoutById
 );
-
-/*
-|--------------------------------------------------------------------------
-| Admin Routes
-|--------------------------------------------------------------------------
-*/
-
-const adminRouter = Router();
-
-adminRouter.use(authorize("ADMIN"));
-
-adminRouter.get(
-    "/admin/all",
-    getAllPayouts
-);
-
-adminRouter.get(
-    "/admin/:id",
-    getPayoutById
-);
-
-router.use(adminRouter);
 
 export default router;

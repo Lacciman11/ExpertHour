@@ -18,12 +18,82 @@ import notificationRealtime from "./realtime/notification.socket.js";
 
 import env from "./config/env.js";
 import paymentLogger from "./utils/logger.js";
+import PaystackRecipientAttempt from "./models/PaystackRecipientAttempt.js";
 
 const PORT = env.port;
 
 // ---------------------------------------------------------------------------
 // Database Connection
 // ---------------------------------------------------------------------------
+
+async function ensurePaystackRecipientAttemptIndexes() {
+    try {
+        const collection = PaystackRecipientAttempt.collection;
+        const indexes = await collection.indexes();
+        const exists = indexes.some((idx) => {
+            if (!idx.key) {
+                return false;
+            }
+            const key = idx.key;
+            if (key.consultantProfileId !== 1 || key.attemptKey !== 1) {
+                return false;
+            }
+            if (!idx.unique) {
+                return false;
+            }
+            const partial = idx.partialFilterExpression;
+            if (!partial || !partial.status) {
+                return false;
+            }
+            const status = partial.status;
+            // Check if it includes IN_PROGRESS and UNKNOWN
+            if (Array.isArray(status.$in)) {
+                return status.$in.includes("IN_PROGRESS") && status.$in.includes("UNKNOWN");
+            }
+            return false;
+        });
+        if (!exists) {
+            await collection.createIndex(
+                { consultantProfileId: 1, attemptKey: 1 },
+                {
+                    unique: true,
+                    partialFilterExpression: {
+                        status: { $in: ["IN_PROGRESS", "UNKNOWN"] },
+                    },
+                    name: "consultantProfileId_1_attemptKey_1_active_partial",
+                }
+            );
+        }
+        // Verify the index exists after ensuring creation
+        const verifyIndexes = await collection.indexes();
+        const verified = verifyIndexes.some((idx) => {
+            if (!idx.key) {
+                return false;
+            }
+            const key = idx.key;
+            if (key.consultantProfileId !== 1 || key.attemptKey !== 1) {
+                return false;
+            }
+            if (!idx.unique) {
+                return false;
+            }
+            const partial = idx.partialFilterExpression;
+            if (!partial || !partial.status || !Array.isArray(partial.status.$in)) {
+                return false;
+            }
+            return partial.status.$in.includes("IN_PROGRESS") && partial.status.$in.includes("UNKNOWN");
+        });
+        if (!verified) {
+            throw new Error("Failed to establish partial unique index on PaystackRecipientAttempt");
+        }
+    } catch (error) {
+        paymentLogger.error("paystack_recipient_attempt_index_init_failed", {
+            event: "paystack_recipient_attempt_index_init_failed",
+            error: error.message,
+        });
+        throw error;
+    }
+}
 
 async function connectDatabase() {
 
@@ -38,6 +108,7 @@ async function connectDatabase() {
             uri: env.mongoUri.replace(/\/\/.*@/, "//***@"),
 
         });
+        await ensurePaystackRecipientAttemptIndexes();
 
     } catch (error) {
 

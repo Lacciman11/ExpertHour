@@ -2,7 +2,8 @@ import mongoose from "mongoose";
 import ConsultantProfile from "../models/ConsultantProfile.js";
 import Category from "../models/Category.js";
 import User from "../models/User.js";
-import { getBanks, resolveBankAccount } from "../services/paystack-transfer.service.js";
+import PaystackRecipientAttempt, { PAYSTACK_RECIPIENT_ATTEMPT_STATUS, computeAttemptKey } from "../models/PaystackRecipientAttempt.js";
+import { getBanks, resolveBankAccount, createTransferRecipient } from "../services/paystack-transfer.service.js";
 import ApiError from "../utils/ApiError.js";
 
 const SORT_MAP = {
@@ -277,6 +278,7 @@ class ConsultantProfileService {
             accountNumber: maskedAccountNumber,
             accountName: profile.accountName || "",
             payoneerId: profile.payoneerId || "",
+            paystackRecipientCode: profile.paystackRecipientCode || "",
         };
     }
 
@@ -342,7 +344,7 @@ class ConsultantProfileService {
             }
         }
 
-        return await ConsultantProfile.findOneAndUpdate(
+        await ConsultantProfile.findOneAndUpdate(
             { userId },
             sanitized,
             {
@@ -350,6 +352,406 @@ class ConsultantProfileService {
                 runValidators: true,
             }
         );
+
+        // Resolve Paystack recipient after bank details are saved (only for Paystack method)
+        const effectivePayoutMethod = sanitized.payoutMethod || previousPayoutMethod;
+        if (effectivePayoutMethod === "paystack") {
+            try {
+                await this.resolvePaystackRecipient(userId);
+            } catch (error) {
+                // Bank details are already saved. Old recipient code was cleared if changed.
+                // Return an explicit error so the consultant can retry without resubmitting.
+                throw new ApiError(
+                    400,
+                    `Bank details saved but payout setup is incomplete: ${error.message}. You can retry payout setup without resubmitting your bank account.`
+                );
+            }
+        }
+
+        return await this.getPayoutSettings(userId);
+    }
+
+    /**
+     * Resolve or create a Paystack transfer recipient for a consultant.
+     *
+     * This is the single shared implementation used by:
+     *   - updatePayoutSettings() (after bank details are saved)
+     *   - createPayout() (before creating a payout)
+     *   - PayoutProcessingService (background worker)
+     *
+     * Steps:
+     *   1. Load the consultant profile by userId
+     *   2. Validate payout method is Paystack
+     *   3. Confirm required bank details exist
+     *   4. Verify bank details via Paystack resolveBankAccount
+     *   5. Compare resolved account name with stored accountName
+     *   6. Reuse existing valid recipient code if present
+     *   7. Otherwise create a new recipient via createTransferRecipient()
+     *   8. Persist the returned code safely (concurrency-safe)
+     *   9. Return { recipientCode, created }
+     *
+     * @param {string} userId - The consultant's user ID
+     * @returns {Promise<{ recipientCode: string, created: boolean }>}
+     * @throws {ApiError} If profile not found, payout method is not Paystack,
+     *   bank details are incomplete, verification fails, or recipient creation fails
+     */
+    async resolvePaystackRecipient(userId) {
+        // 1. Load the consultant profile
+        const profile = await ConsultantProfile.findOne({ userId });
+        if (!profile) {
+            throw new ApiError(404, "Consultant profile not found");
+        }
+
+        // 2. Validate payout method is Paystack
+        if (profile.payoutMethod !== "paystack") {
+            throw new ApiError(400, "Payout method is not Paystack");
+        }
+
+        const currency = profile.currency || "NGN";
+        const attemptKey = computeAttemptKey({
+            payoutMethod: profile.payoutMethod,
+            bankCode: profile.bankCode,
+            accountNumber: profile.accountNumber,
+            currency,
+        });
+
+        // 3. Reuse existing valid recipient code if present and matches current bank details context
+        if (profile.paystackRecipientCode && profile.paystackRecipientCode !== "") {
+            // If bank details are missing, still allow reuse only if code exists? But better to be defensive
+            return { recipientCode: profile.paystackRecipientCode, created: false };
+        }
+
+        // 4. Confirm required bank details exist
+        if (!profile.bankCode || !profile.accountNumber || !profile.accountName) {
+            throw new ApiError(
+                400,
+                "Bank details are incomplete. Provide bank code, account number, and account name."
+            );
+        }
+
+        // 5. Verify bank details via Paystack
+        let resolution;
+        try {
+            resolution = await resolveBankAccount({
+                accountNumber: profile.accountNumber,
+                bankCode: profile.bankCode,
+            });
+        } catch (error) {
+            throw new ApiError(400, `Unable to verify bank account: ${error.message}`);
+        }
+
+        // 6. Compare resolved account name with stored accountName
+        const normalizeName = (name) =>
+            name.trim().replace(/\s+/g, " ").toLowerCase();
+
+        const normalizedResolved = normalizeName(resolution.accountName);
+        const normalizedStored = normalizeName(profile.accountName);
+        if (normalizedResolved !== normalizedStored) {
+            throw new ApiError(
+                400,
+                "Bank account name does not match Paystack records. Please verify your account details."
+            );
+        }
+
+        // Check for existing attempts
+        const STALE_ATTEMPT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+        // Handle stale IN_PROGRESS attempts conservatively
+        const staleCutoff = new Date(Date.now() - STALE_ATTEMPT_TIMEOUT_MS);
+        try {
+            await PaystackRecipientAttempt.updateOne(
+                {
+                    consultantProfileId: profile._id,
+                    attemptKey,
+                    status: PAYSTACK_RECIPIENT_ATTEMPT_STATUS.IN_PROGRESS,
+                    startedAt: { $lt: staleCutoff },
+                },
+                {
+                    $set: {
+                        status: PAYSTACK_RECIPIENT_ATTEMPT_STATUS.UNKNOWN,
+                        completedAt: new Date(),
+                        errorSummary: "stale_in_progress_timed_out",
+                    },
+                }
+            );
+        } catch (e) {
+            // ignore
+        }
+
+        // SUCCEEDED with recipient code: recover profile persistence
+        const succeededAttempt = await PaystackRecipientAttempt.findOne({
+            consultantProfileId: profile._id,
+            attemptKey,
+            status: PAYSTACK_RECIPIENT_ATTEMPT_STATUS.SUCCEEDED,
+            recipientCode: { $ne: null },
+        }).sort({ completedAt: -1, createdAt: -1 });
+
+        if (succeededAttempt && succeededAttempt.recipientCode) {
+            try {
+                const updateResult = await ConsultantProfile.updateOne(
+                    { _id: profile._id, paystackRecipientCode: { $in: ["", null] } },
+                    { $set: { paystackRecipientCode: succeededAttempt.recipientCode } }
+                );
+                if (updateResult.modifiedCount === 0) {
+                    const freshProfile = await ConsultantProfile.findById(profile._id);
+                    if (freshProfile.paystackRecipientCode && freshProfile.paystackRecipientCode !== "") {
+                        return { recipientCode: freshProfile.paystackRecipientCode, created: false };
+                    }
+                }
+            } catch (e) {
+                throw e;
+            }
+            const freshProfile = await ConsultantProfile.findById(profile._id);
+            if (freshProfile.paystackRecipientCode && freshProfile.paystackRecipientCode !== "") {
+                return { recipientCode: freshProfile.paystackRecipientCode, created: false };
+            }
+            throw new ApiError(500, "Failed to persist transfer recipient code");
+        }
+
+        // IN_PROGRESS: do not start another creation request
+        const inProgressAttempt = await PaystackRecipientAttempt.findOne({
+            consultantProfileId: profile._id,
+            attemptKey,
+            status: PAYSTACK_RECIPIENT_ATTEMPT_STATUS.IN_PROGRESS,
+        });
+        if (inProgressAttempt) {
+            throw new ApiError(409, "Recipient creation already in progress");
+        }
+
+        // UNKNOWN: do not create another recipient automatically
+        const unknownAttempt = await PaystackRecipientAttempt.findOne({
+            consultantProfileId: profile._id,
+            attemptKey,
+            status: PAYSTACK_RECIPIENT_ATTEMPT_STATUS.UNKNOWN,
+        });
+        if (unknownAttempt) {
+            throw new ApiError(409, "Recipient creation outcome is unknown; reconciliation required");
+        }
+
+        // FAILED: allow new attempt only if definitive failure
+
+        // Atomically claim a new attempt before calling Paystack
+        let attempt;
+        try {
+            attempt = await PaystackRecipientAttempt.create({
+                consultantProfileId: profile._id,
+                userId: profile.userId,
+                attemptKey,
+                status: PAYSTACK_RECIPIENT_ATTEMPT_STATUS.IN_PROGRESS,
+                startedAt: new Date(),
+            });
+        } catch (error) {
+            if (error.code === 11000) {
+                // Duplicate key from unique partial index - reload winning attempt
+                // Wait briefly for winner to complete
+                const maxWaitMs = 5000;
+                const pollIntervalMs = 100;
+                const startWait = Date.now();
+                while (Date.now() - startWait < maxWaitMs) {
+                    const succeededAfterRace = await PaystackRecipientAttempt.findOne({
+                        consultantProfileId: profile._id,
+                        attemptKey,
+                        status: PAYSTACK_RECIPIENT_ATTEMPT_STATUS.SUCCEEDED,
+                        recipientCode: { $ne: null },
+                    }).sort({ completedAt: -1, createdAt: -1 });
+                    if (succeededAfterRace && succeededAfterRace.recipientCode) {
+                        try {
+                            await ConsultantProfile.updateOne(
+                                { _id: profile._id, paystackRecipientCode: { $in: ["", null] } },
+                                { $set: { paystackRecipientCode: succeededAfterRace.recipientCode } }
+                            );
+                        } catch (e) {
+                            throw e;
+                        }
+                        const freshProfile = await ConsultantProfile.findById(profile._id);
+                        if (freshProfile.paystackRecipientCode && freshProfile.paystackRecipientCode !== "") {
+                            return { recipientCode: freshProfile.paystackRecipientCode, created: false };
+                        }
+                        throw new ApiError(500, "Failed to persist transfer recipient code");
+                    }
+                    const winningAttempt = await PaystackRecipientAttempt.findOne({
+                        consultantProfileId: profile._id,
+                        attemptKey,
+                        status: { $in: [PAYSTACK_RECIPIENT_ATTEMPT_STATUS.IN_PROGRESS, PAYSTACK_RECIPIENT_ATTEMPT_STATUS.UNKNOWN] },
+                    });
+                    if (winningAttempt) {
+                        if (winningAttempt.status === PAYSTACK_RECIPIENT_ATTEMPT_STATUS.UNKNOWN) {
+                            throw new ApiError(409, "Recipient creation outcome is unknown; reconciliation required");
+                        }
+                        if (winningAttempt.status === PAYSTACK_RECIPIENT_ATTEMPT_STATUS.IN_PROGRESS) {
+                            await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                // Check again after waiting
+                const succeededAfterRace = await PaystackRecipientAttempt.findOne({
+                    consultantProfileId: profile._id,
+                    attemptKey,
+                    status: PAYSTACK_RECIPIENT_ATTEMPT_STATUS.SUCCEEDED,
+                    recipientCode: { $ne: null },
+                }).sort({ completedAt: -1, createdAt: -1 });
+                if (succeededAfterRace && succeededAfterRace.recipientCode) {
+                    try {
+                        await ConsultantProfile.updateOne(
+                            { _id: profile._id, paystackRecipientCode: { $in: ["", null] } },
+                            { $set: { paystackRecipientCode: succeededAfterRace.recipientCode } }
+                        );
+                    } catch (e) {
+                        throw e;
+                    }
+                    const freshProfile = await ConsultantProfile.findById(profile._id);
+                    if (freshProfile.paystackRecipientCode && freshProfile.paystackRecipientCode !== "") {
+                        return { recipientCode: freshProfile.paystackRecipientCode, created: false };
+                    }
+                    throw new ApiError(500, "Failed to persist transfer recipient code");
+                }
+                const finalWinningAttempt = await PaystackRecipientAttempt.findOne({
+                    consultantProfileId: profile._id,
+                    attemptKey,
+                    status: { $in: [PAYSTACK_RECIPIENT_ATTEMPT_STATUS.IN_PROGRESS, PAYSTACK_RECIPIENT_ATTEMPT_STATUS.UNKNOWN] },
+                });
+                if (finalWinningAttempt) {
+                    if (finalWinningAttempt.status === PAYSTACK_RECIPIENT_ATTEMPT_STATUS.UNKNOWN) {
+                        throw new ApiError(409, "Recipient creation outcome is unknown; reconciliation required");
+                    }
+                    if (finalWinningAttempt.status === PAYSTACK_RECIPIENT_ATTEMPT_STATUS.IN_PROGRESS) {
+                        throw new ApiError(409, "Recipient creation already in progress");
+                    }
+                }
+            }
+            // If cannot durably record attempt, do not call Paystack
+            throw new ApiError(500, "Failed to record recipient creation attempt");
+        }
+
+        // 7. Create new recipient via Paystack only after attempt is durably recorded
+        let result;
+        let paystackError = null;
+        try {
+            result = await createTransferRecipient({
+                name: profile.accountName,
+                accountNumber: profile.accountNumber,
+                bankCode: profile.bankCode,
+                currency,
+            });
+        } catch (error) {
+            paystackError = error;
+            // Determine if definitive rejection
+            const isDefinitive = error instanceof ApiError && error.statusCode >= 400 && error.statusCode < 500 && error.statusCode !== 429;
+            try {
+                await PaystackRecipientAttempt.findByIdAndUpdate(attempt._id, {
+                    $set: {
+                        status: isDefinitive ? PAYSTACK_RECIPIENT_ATTEMPT_STATUS.FAILED : PAYSTACK_RECIPIENT_ATTEMPT_STATUS.UNKNOWN,
+                        errorCode: error.statusCode ? String(error.statusCode) : null,
+                        errorSummary: "paystack_recipient_creation_failed",
+                        completedAt: new Date(),
+                    },
+                });
+            } catch (e) {
+                // ignore
+            }
+            if (error instanceof ApiError) {
+                throw error;
+            }
+            throw new ApiError(
+                500,
+                `Failed to create Paystack transfer recipient: ${error.message}`
+            );
+        }
+
+        // Paystack returned a recipient code - persist it on the attempt first
+        try {
+            await PaystackRecipientAttempt.findByIdAndUpdate(attempt._id, {
+                $set: {
+                    recipientCode: result.recipientCode,
+                },
+            });
+        } catch (e) {
+            // If cannot store code on attempt, do not create another recipient - mark unknown
+            try {
+                await PaystackRecipientAttempt.findByIdAndUpdate(attempt._id, {
+                    $set: {
+                        status: PAYSTACK_RECIPIENT_ATTEMPT_STATUS.UNKNOWN,
+                        completedAt: new Date(),
+                    },
+                });
+            } catch (e2) {
+                // ignore
+            }
+            throw new ApiError(500, "Failed to persist transfer recipient code");
+        }
+
+        // Then persist it on ConsultantProfile, using bank-details/attempt-key guard
+        try {
+            const updateResult = await ConsultantProfile.updateOne(
+                { _id: profile._id, paystackRecipientCode: { $in: ["", null] } },
+                { $set: { paystackRecipientCode: result.recipientCode } }
+            );
+
+            if (updateResult.modifiedCount === 0) {
+                // Another process created the recipient - fetch the existing code
+                const freshProfile = await ConsultantProfile.findById(profile._id);
+                if (freshProfile.paystackRecipientCode && freshProfile.paystackRecipientCode !== "") {
+                    // Mark attempt as succeeded with the code we got from Paystack? Or just note recovery
+                    try {
+                        await PaystackRecipientAttempt.findByIdAndUpdate(attempt._id, {
+                            $set: {
+                                status: PAYSTACK_RECIPIENT_ATTEMPT_STATUS.SUCCEEDED,
+                                recipientCode: result.recipientCode,
+                                completedAt: new Date(),
+                            },
+                        });
+                    } catch (e) {
+                        // ignore
+                    }
+                    return { recipientCode: freshProfile.paystackRecipientCode, created: false };
+                }
+                // DB persistence failed after Paystack success - do not create another recipient
+                try {
+                    await PaystackRecipientAttempt.findByIdAndUpdate(attempt._id, {
+                        $set: {
+                            status: PAYSTACK_RECIPIENT_ATTEMPT_STATUS.UNKNOWN,
+                            completedAt: new Date(),
+                        },
+                    });
+                } catch (e) {
+                    // ignore
+                }
+                throw new ApiError(500, "Failed to persist transfer recipient code");
+            }
+        } catch (error) {
+            if (error instanceof ApiError) {
+                throw error;
+            }
+            // DB failure after Paystack success - mark unknown, do not create another recipient
+            try {
+                await PaystackRecipientAttempt.findByIdAndUpdate(attempt._id, {
+                    $set: {
+                        status: PAYSTACK_RECIPIENT_ATTEMPT_STATUS.UNKNOWN,
+                        completedAt: new Date(),
+                    },
+                });
+            } catch (e) {
+                // ignore
+            }
+            throw new ApiError(500, "Failed to persist transfer recipient code");
+        }
+
+        // Mark the attempt SUCCEEDED only after the recipient code is safely persisted
+        try {
+            await PaystackRecipientAttempt.findByIdAndUpdate(attempt._id, {
+                $set: {
+                    status: PAYSTACK_RECIPIENT_ATTEMPT_STATUS.SUCCEEDED,
+                    completedAt: new Date(),
+                },
+            });
+        } catch (e) {
+            // ignore
+        }
+
+        // 9. Return the resolved code
+        return { recipientCode: result.recipientCode, created: true };
     }
 
     async getBanks() {

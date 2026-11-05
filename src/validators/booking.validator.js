@@ -37,9 +37,10 @@ export const createBookingValidator = [
             return true;
         }),
 
+    // Amount is computed server-side from consultant hourly rate and duration (authoritative).
+    // Accepted but ignored when provided for backward compatibility with existing clients.
     body("amount")
-        .notEmpty()
-        .withMessage("Amount is required")
+        .optional()
         .isFloat({ min: 0 })
         .withMessage("Amount must be a positive number"),
 

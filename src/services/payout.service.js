@@ -17,6 +17,7 @@ import {
     EMAIL_TEMPLATE_ID,
 } from "../utils/constants.js";
 import { initiateTransfer } from "../services/paystack-transfer.service.js";
+import consultantProfileService from "./consultant-profile.service.js";
 
 // ---------------------------------------------------------------------------
 // Payable Amount Helpers
@@ -204,6 +205,19 @@ class PayoutService {
             throw new ApiError(404, "Consultant profile not found");
         }
 
+        // Resolve Paystack recipient BEFORE the transaction to avoid holding
+        // a MongoDB transaction open across a Paystack network request.
+        let recipientCode;
+        try {
+            const recipientResult = await consultantProfileService.resolvePaystackRecipient(consultantId);
+            recipientCode = recipientResult.recipientCode;
+        } catch (error) {
+            throw new ApiError(
+                400,
+                `Cannot create payout: ${error.message}. Please complete payout setup in Settings first.`
+            );
+        }
+
         // Start a session for transaction support
         const mongoSession = await mongoose.startSession();
 
@@ -278,9 +292,7 @@ class PayoutService {
                     );
                 }
 
-                // 5. Create the payout
-                // Note: transferRecipientCode is required by the model but will be updated
-                // during Paystack integration. We use a placeholder for now.
+                // 5. Create the payout with the resolved recipient code
                 const [payout] = await Payout.create([{
                     consultantId,
                     consultantProfileId: consultantProfile._id,
@@ -294,7 +306,7 @@ class PayoutService {
                     netAmount: adjustedNetAmount,
                     recoveryOffset: recoveryOffset,
                     status: PAYOUT_STATUS.PENDING,
-                    transferRecipientCode: "RCP_PENDING", // Placeholder, updated during Paystack integration
+                    transferRecipientCode: recipientCode,
                 }], { session: mongoSession });
 
                 // 6. Update earnings to IN_PAYOUT status
@@ -610,6 +622,18 @@ class PayoutService {
             throw new ApiError(400, `Cannot initiate transfer for payout in ${payout.status} status`);
         }
 
+        // Use the recipient code recorded on this specific payout. Do not
+        // silently substitute the consultant's latest recipient code.
+        const payoutRecipientCode = payout.transferRecipientCode;
+
+        // Reject missing or placeholder recipient codes before calling Paystack.
+        if (!payoutRecipientCode || payoutRecipientCode === "RCP_PENDING") {
+            throw new ApiError(
+                400,
+                "No valid transfer recipient code for this payout. Please complete payout setup in Settings first."
+            );
+        }
+
         // Zero-net payout: recovery fully consumed the consultant's entitlement.
         // No Paystack transfer is needed. Complete the payout directly so that
         // included earnings transition to PAID via the existing completion path.
@@ -624,7 +648,7 @@ class PayoutService {
         try {
             transferResult = await initiateTransfer({
                 amount: payout.netAmount,
-                recipientCode,
+                recipientCode: payoutRecipientCode,
                 reference: transferReference,
                 reason,
             });
@@ -761,11 +785,10 @@ class PayoutService {
                 );
 
                 if (completedResult.modifiedCount !== payout.earningIds.length) {
-                    paymentLogger.warn("payout_completion_partial", {
-                        payoutId: payout._id.toString(),
-                        expected: payout.earningIds.length,
-                        modified: completedResult.modifiedCount,
-                    });
+                    throw new ApiError(
+                        409,
+                        `Payout completion race: expected to complete ${payout.earningIds.length} earnings, but only ${completedResult.modifiedCount} were updated`
+                    );
                 }
 
                 return payout;
@@ -856,11 +879,10 @@ class PayoutService {
                 );
 
                 if (failedResult.modifiedCount !== payout.earningIds.length) {
-                    paymentLogger.warn("payout_failure_partial", {
-                        payoutId: payout._id.toString(),
-                        expected: payout.earningIds.length,
-                        modified: failedResult.modifiedCount,
-                    });
+                    throw new ApiError(
+                        409,
+                        `Payout failure rollback race: expected to release ${payout.earningIds.length} earnings, but only ${failedResult.modifiedCount} were updated`
+                    );
                 }
 
                 return payout;

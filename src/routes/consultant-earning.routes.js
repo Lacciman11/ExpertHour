@@ -24,6 +24,43 @@ router.use(authenticate());
 
 /*
 |--------------------------------------------------------------------------
+| Admin Routes
+|--------------------------------------------------------------------------
+|
+| Mounted at "/admin" before the consultant "/:id" catch-all so paths like
+| "/admin/all" are not captured as consultant id="admin". Scoping to "/admin"
+| ensures the ADMIN role check applies only to admin paths (preserves
+| consultant endpoint access and existing external paths).
+*/
+
+const adminRouter = Router();
+
+adminRouter.use(authorize("ADMIN"));
+
+adminRouter.get(
+    "/all",
+    getAllEarnings
+);
+
+adminRouter.get(
+    "/consistency",
+    verifyEarningConsistency
+);
+
+adminRouter.get(
+    "/consistency/:id",
+    verifyEarningConsistency
+);
+
+adminRouter.get(
+    "/:id",
+    getEarningById
+);
+
+router.use("/admin", adminRouter);
+
+/*
+|--------------------------------------------------------------------------
 | Consultant Routes
 |--------------------------------------------------------------------------
 */
@@ -45,37 +82,5 @@ router.get(
     authorize("CONSULTANT"),
     getMyEarningById
 );
-
-/*
-|--------------------------------------------------------------------------
-| Admin Routes
-|--------------------------------------------------------------------------
-*/
-
-const adminRouter = Router();
-
-adminRouter.use(authorize("ADMIN"));
-
-adminRouter.get(
-    "/admin/all",
-    getAllEarnings
-);
-
-adminRouter.get(
-    "/admin/consistency",
-    verifyEarningConsistency
-);
-
-adminRouter.get(
-    "/admin/consistency/:id",
-    verifyEarningConsistency
-);
-
-adminRouter.get(
-    "/admin/:id",
-    getEarningById
-);
-
-router.use(adminRouter);
 
 export default router;

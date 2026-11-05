@@ -21,7 +21,7 @@ import ConsultantProfile from "../models/ConsultantProfile.js";
 import { EARNING_STATUS, PAYOUT_STATUS } from "../utils/constants.js";
 import env from "../config/env.js";
 import paymentLogger from "../utils/logger.js";
-import { createTransferRecipient, resolveBankAccount } from "./paystack-transfer.service.js";
+import consultantProfileService from "./consultant-profile.service.js";
 
 // ---------------------------------------------------------------------------
 // Export class for testing
@@ -220,31 +220,17 @@ class PayoutProcessingService {
     }
 
     /**
-     * Normalize a name for comparison:
-     * - trim leading/trailing whitespace
-     * - collapse repeated internal whitespace
-     * - lowercase for case-insensitive comparison
-     */
-    static #normalizeName(name) {
-        return name.trim().replace(/\s+/g, " ").toLowerCase();
-    }
-
-    /**
      * Resolve a real Paystack recipient code for a pending payout.
      *
-     * Flow:
-     * 1. Load ConsultantProfile by payout.consultantProfileId.
-     * 2. If profile.paystackRecipientCode exists, return it.
-     * 3. Validate required bank fields.
-     * 4. Re-read profile to guard against concurrent recipient creation.
-     * 5. Verify bank account with Paystack.
-     * 6. Compare resolved account name with stored accountName.
-     * 7. Call createTransferRecipient() if names match.
-     * 8. Conditionally update profile only if paystackRecipientCode is still empty.
-     * 9. Return the resolved code (or null on failure).
+     * Delegates to the shared recipient-resolution operation in
+     * ConsultantProfileService.resolvePaystackRecipient(). Returns null on
+     * any failure so the payout is skipped and retried on the next cycle.
+     *
+     * @param {object} payout - The Payout document
+     * @returns {Promise<string|null>} The recipient code, or null if resolution failed
      */
     async #resolveRecipientCode(payout) {
-        // 1. Load the consultant profile
+        // Load the consultant profile to get the userId
         const profile = await ConsultantProfile.findById(payout.consultantProfileId);
         if (!profile) {
             paymentLogger.warn("payout_transfer_skipped_no_profile", {
@@ -255,97 +241,19 @@ class PayoutProcessingService {
             return null;
         }
 
-        // 2. Reuse existing stored recipient code if available
-        if (profile.paystackRecipientCode && profile.paystackRecipientCode !== "") {
-            return profile.paystackRecipientCode;
-        }
-
-        // 3. Validate required fields for recipient creation
-        if (!profile.accountName || !profile.accountNumber || !profile.bankCode) {
-            paymentLogger.warn("payout_transfer_skipped_incomplete_profile", {
-                event: "payout_transfer_skipped_incomplete_profile",
-                payoutId: payout._id.toString(),
-                profileId: profile._id.toString(),
-                missing: {
-                    accountName: !profile.accountName,
-                    accountNumber: !profile.accountNumber,
-                    bankCode: !profile.bankCode,
-                },
-            });
-            return null;
-        }
-
-        // 4. Re-read profile to get latest paystackRecipientCode (concurrency safety)
-        const freshProfile = await ConsultantProfile.findById(payout.consultantProfileId);
-        if (freshProfile.paystackRecipientCode && freshProfile.paystackRecipientCode !== "") {
-            return freshProfile.paystackRecipientCode;
-        }
-
-        // 5. Verify bank account with Paystack
-        let resolvedAccountName;
+        // Use the shared recipient resolution operation
         try {
-            const resolution = await resolveBankAccount({
-                accountNumber: profile.accountNumber,
-                bankCode: profile.bankCode,
-            });
-            resolvedAccountName = resolution.accountName;
+            const result = await consultantProfileService.resolvePaystackRecipient(profile.userId);
+            return result.recipientCode;
         } catch (error) {
-            paymentLogger.error("payout_transfer_bank_resolution_failed", {
-                event: "payout_transfer_bank_resolution_failed",
+            paymentLogger.error("payout_transfer_recipient_resolution_failed", {
+                event: "payout_transfer_recipient_resolution_failed",
                 payoutId: payout._id.toString(),
                 profileId: profile._id.toString(),
                 error: error.message,
             });
             return null;
         }
-
-        // 6. Compare resolved account name with stored accountName
-        const normalizedResolved = PayoutProcessingService.#normalizeName(resolvedAccountName);
-        const normalizedStored = PayoutProcessingService.#normalizeName(profile.accountName);
-
-        if (normalizedResolved !== normalizedStored) {
-            paymentLogger.warn("payout_transfer_skipped_name_mismatch", {
-                event: "payout_transfer_skipped_name_mismatch",
-                payoutId: payout._id.toString(),
-                profileId: profile._id.toString(),
-            });
-            return null;
-        }
-
-        // 7. Create transfer recipient via Paystack
-        let recipientCode;
-        try {
-            const result = await createTransferRecipient({
-                name: profile.accountName,
-                accountNumber: profile.accountNumber,
-                bankCode: profile.bankCode,
-                currency: profile.currency || "NGN",
-            });
-            recipientCode = result.recipientCode;
-        } catch (error) {
-            paymentLogger.error("payout_transfer_recipient_creation_failed", {
-                event: "payout_transfer_recipient_creation_failed",
-                payoutId: payout._id.toString(),
-                profileId: profile._id.toString(),
-                error: error.message,
-            });
-            return null;
-        }
-
-        // 8. Conditional update: only write if paystackRecipientCode is still empty
-        const updateResult = await ConsultantProfile.updateOne(
-            { _id: profile._id, paystackRecipientCode: { $in: ["", null] } },
-            { $set: { paystackRecipientCode: recipientCode } }
-        );
-
-        if (updateResult.modifiedCount === 0) {
-            // Another worker won the race - fetch the existing code
-            const winningProfile = await ConsultantProfile.findById(profile._id);
-            return winningProfile.paystackRecipientCode;
-        }
-
-        // 9. Return the resolved code
-        return recipientCode;
     }
 
     /**
