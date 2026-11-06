@@ -116,26 +116,16 @@ export const updateConsultantProfileValidator = [
         .isLength({ max: 2000 })
         .withMessage("Bio cannot exceed 2000 characters"),
 
-    body("skills")
+    body("categories")
         .optional()
         .isArray({ min: 1 })
-        .withMessage("At least one skill is required")
-        .custom((skills) => {
-
-            if (!skills || !Array.isArray(skills)) {
-
-                return true;
-
+        .withMessage("At least one category is required")
+        .custom((categories) => {
+            if (!categories || !Array.isArray(categories)) return true;
+            if (!categories.every((cat) => typeof cat === "string" && cat.trim() !== "")) {
+                throw new Error("Categories must be valid category IDs");
             }
-
-            if (!skills.every((skill) => typeof skill === "string" && skill.trim() !== "")) {
-
-                throw new Error("Skills must be non-empty strings");
-
-            }
-
             return true;
-
         }),
 
     body("hourlyRate")
@@ -143,15 +133,35 @@ export const updateConsultantProfileValidator = [
         .isFloat({ min: 0, finite: true })
         .withMessage("Hourly rate must be a positive number"),
 
-    body("currency")
-        .optional()
-        .isLength({ min: 3, max: 3 })
-        .withMessage("Currency must be a 3-letter code"),
-
     body("availability")
         .optional()
         .isIn(["AVAILABLE", "BUSY", "UNAVAILABLE"])
         .withMessage("Availability must be AVAILABLE, BUSY, or UNAVAILABLE"),
+
+    body("availabilitySlots")
+        .optional()
+        .isArray()
+        .withMessage("Availability slots must be an array")
+        .custom((slots) => {
+            if (!slots || !Array.isArray(slots)) return true;
+            const timeRe = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+            for (const slot of slots) {
+                if (!slot || typeof slot !== "object") throw new Error("Each availability slot must be an object");
+                if (!Number.isInteger(slot.dayOfWeek) || slot.dayOfWeek < 0 || slot.dayOfWeek > 6) {
+                    throw new Error("dayOfWeek must be an integer between 0 and 6");
+                }
+                if (typeof slot.startTime !== "string" || !timeRe.test(slot.startTime)) {
+                    throw new Error("startTime must be a valid HH:MM time");
+                }
+                if (typeof slot.endTime !== "string" || !timeRe.test(slot.endTime)) {
+                    throw new Error("endTime must be a valid HH:MM time");
+                }
+                if (slot.isActive !== undefined && typeof slot.isActive !== "boolean") {
+                    throw new Error("isActive must be a boolean");
+                }
+            }
+            return true;
+        }),
 
     body("experience")
         .optional()

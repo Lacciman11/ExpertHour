@@ -1,10 +1,14 @@
 import mongoose from "mongoose";
+import env from "../config/env.js";
 import ConsultantProfile from "../models/ConsultantProfile.js";
 import Category from "../models/Category.js";
 import User from "../models/User.js";
 import PaystackRecipientAttempt, { PAYSTACK_RECIPIENT_ATTEMPT_STATUS, computeAttemptKey } from "../models/PaystackRecipientAttempt.js";
 import { getBanks, resolveBankAccount, createTransferRecipient } from "../services/paystack-transfer.service.js";
 import ApiError from "../utils/ApiError.js";
+
+const isPaystackTestMode = () => typeof env?.paystack?.secretKey === "string" && env.paystack.secretKey.startsWith("sk_test_");
+const PAYSTACK_TEST_BANK_HINT = " In Paystack test mode, use supported test bank codes 001 or 002 for account resolution.";
 
 const SORT_MAP = {
     newest: { createdAt: -1, _id: -1 },
@@ -242,7 +246,7 @@ class ConsultantProfileService {
 
         }
 
-        return await ConsultantProfile.findOneAndUpdate(
+        const profile = await ConsultantProfile.findOneAndUpdate(
 
             { userId },
 
@@ -258,6 +262,13 @@ class ConsultantProfileService {
 
         );
 
+        if (!profile) return profile;
+
+        return profile.populate([
+            { path: "userId", select: "firstName lastName email avatar" },
+            { path: "categories", select: "name" }
+        ]);
+
     }
 
     async getPayoutSettings(userId) {
@@ -271,14 +282,19 @@ class ConsultantProfileService {
             ? "****" + profile.accountNumber.slice(-4)
             : "";
 
+        const payoutMethod = profile.payoutMethod || "paystack";
+        const payoutSetupComplete = payoutMethod === "paystack"
+            ? Boolean(profile.paystackRecipientCode)
+            : Boolean(profile.payoneerId);
+
         return {
-            payoutMethod: profile.payoutMethod || "paystack",
+            payoutMethod,
             bankName: profile.bankName || "",
             bankCode: profile.bankCode || "",
             accountNumber: maskedAccountNumber,
             accountName: profile.accountName || "",
             payoneerId: profile.payoneerId || "",
-            paystackRecipientCode: profile.paystackRecipientCode || "",
+            payoutSetupComplete,
         };
     }
 
@@ -320,7 +336,10 @@ class ConsultantProfileService {
             sanitized.paystackRecipientCode = "";
         }
 
-        // For Paystack bank updates, verify account via Paystack and use verified name
+        // For Paystack bank updates, verify account via Paystack and use verified name.
+        // The successful verification result is bound to exact bankCode/accountNumber and
+        // passed internally to recipient resolution to avoid a redundant external resolve.
+        let preverifiedResolution = null;
         if (sanitized.payoutMethod === "paystack" || (!sanitized.payoutMethod && previousPayoutMethod === "paystack")) {
             const effectivePayoutMethod = sanitized.payoutMethod || previousPayoutMethod;
             if (effectivePayoutMethod === "paystack") {
@@ -336,8 +355,15 @@ class ConsultantProfileService {
                         try {
                             const resolved = await resolveBankAccount({ accountNumber, bankCode });
                             sanitized.accountName = resolved.accountName;
+                            // Bound to the exact values that were verified (server-side only; never from frontend).
+                            preverifiedResolution = {
+                                bankCode: String(bankCode),
+                                accountNumber: String(accountNumber),
+                                accountName: resolved.accountName,
+                            };
                         } catch (error) {
-                            throw new ApiError(400, `Unable to verify account: ${error.message}`);
+                            const hint = isPaystackTestMode() ? PAYSTACK_TEST_BANK_HINT : "";
+                            throw new ApiError(400, `Unable to verify account: ${error.message}${hint}`);
                         }
                     }
                 }
@@ -357,7 +383,7 @@ class ConsultantProfileService {
         const effectivePayoutMethod = sanitized.payoutMethod || previousPayoutMethod;
         if (effectivePayoutMethod === "paystack") {
             try {
-                await this.resolvePaystackRecipient(userId);
+                await this.resolvePaystackRecipient(userId, { preverifiedResolution });
             } catch (error) {
                 // Bank details are already saved. Old recipient code was cleared if changed.
                 // Return an explicit error so the consultant can retry without resubmitting.
@@ -391,11 +417,16 @@ class ConsultantProfileService {
      *   9. Return { recipientCode, created }
      *
      * @param {string} userId - The consultant's user ID
+     * @param {object} [options] - Internal server-side options (never from frontend)
+     * @param {{bankCode:string,accountNumber:string,accountName:string}|null} [options.preverifiedResolution]
+     *   Successful resolveBankAccount result from the same server flow, bound to exact
+     *   bankCode/accountNumber. Used only when it exactly matches the current profile's
+     *   saved details; otherwise ignored and verification is performed (fail-closed).
      * @returns {Promise<{ recipientCode: string, created: boolean }>}
      * @throws {ApiError} If profile not found, payout method is not Paystack,
      *   bank details are incomplete, verification fails, or recipient creation fails
      */
-    async resolvePaystackRecipient(userId) {
+    async resolvePaystackRecipient(userId, options = {}) {
         // 1. Load the consultant profile
         const profile = await ConsultantProfile.findOne({ userId });
         if (!profile) {
@@ -429,15 +460,29 @@ class ConsultantProfileService {
             );
         }
 
-        // 5. Verify bank details via Paystack
+        // 5. Verify bank details via Paystack. Reuse a server-side preverified result only when it
+        // is bound to the exact current bankCode/accountNumber; never accept frontend-supplied flags.
         let resolution;
-        try {
-            resolution = await resolveBankAccount({
-                accountNumber: profile.accountNumber,
-                bankCode: profile.bankCode,
-            });
-        } catch (error) {
-            throw new ApiError(400, `Unable to verify bank account: ${error.message}`);
+        const pre = options && typeof options === "object" ? options.preverifiedResolution : null;
+        const preMatchesCurrent = Boolean(
+            pre &&
+            pre.accountName &&
+            String(pre.bankCode) === String(profile.bankCode) &&
+            String(pre.accountNumber) === String(profile.accountNumber)
+        );
+        if (preMatchesCurrent) {
+            resolution = { accountName: pre.accountName, accountNumber: pre.accountNumber, bankCode: pre.bankCode };
+        } else {
+            // No valid matching preverified result -> perform strict verification (fail-closed).
+            try {
+                resolution = await resolveBankAccount({
+                    accountNumber: profile.accountNumber,
+                    bankCode: profile.bankCode,
+                });
+            } catch (error) {
+                const hint = isPaystackTestMode() ? PAYSTACK_TEST_BANK_HINT : "";
+                throw new ApiError(400, `Unable to verify bank account: ${error.message}${hint}`);
+            }
         }
 
         // 6. Compare resolved account name with stored accountName
@@ -775,7 +820,8 @@ class ConsultantProfileService {
                 bankCode: result.bankCode,
             };
         } catch (error) {
-            throw new ApiError(400, "Unable to verify account. Please check the account number and bank code.");
+            const hint = isPaystackTestMode() ? PAYSTACK_TEST_BANK_HINT : "";
+            throw new ApiError(400, `Unable to verify account. Please check the account number and bank code.${hint}`);
         }
     }
 

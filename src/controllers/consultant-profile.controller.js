@@ -176,23 +176,12 @@ export const getMyPayoutSettings = asyncHandler(async (req, res) => {
 });
 
 export const updateMyPayoutSettings = asyncHandler(async (req, res) => {
-    const updatedProfile = await consultantProfileService.updatePayoutSettings(req.user._id, req.body);
-
-    const maskedAccountNumber = updatedProfile.accountNumber
-        ? "****" + updatedProfile.accountNumber.slice(-4)
-        : "";
+    const payoutSettings = await consultantProfileService.updatePayoutSettings(req.user._id, req.body);
 
     return res.status(200).json(
         new ApiResponse(
             200,
-            {
-                payoutMethod: updatedProfile.payoutMethod,
-                bankName: updatedProfile.bankName,
-                bankCode: updatedProfile.bankCode,
-                accountNumber: maskedAccountNumber,
-                accountName: updatedProfile.accountName,
-                payoneerId: updatedProfile.payoneerId,
-            },
+            payoutSettings,
             "Payout settings updated successfully"
         )
     );
